@@ -1,5 +1,7 @@
 # 状态与交接（2026-11-26）
 
-M0：设计文档和目录骨架完成，未实现运行代码。没有实际编译、网络测试、部署、Release。阶段验收仅为文档基线，不表示产品可用。
-M1 下一批：确认 Go 工具链和依赖版本，创建最小 Agent/server、Linux TUN/route，静态 peer WG 双向 TCP/UDP；随后验证 Bind adapter 与经过认证的 WSS relay。真实证据满足 ROADMAP 后才能进入 M2。
-阻塞/未决：WireGuard Bind 语义和 ICE socket 适配未验证；QUIC MTU/数据报未验证；Windows/macOS 签名和平台权限待验证；项目许可证待所有者确认。当前不部署或开放公网端口。
+M0 已提交。M1.1–M1.6 核心代码已落地：Go 工程、Linux TUN / 路由、WireGuard、静态每 peer UDP/WSS path、签名租约与设备证明、CLI/后台重连/状态/清理。
+实际 Go 1.23.12 编译成功，两个 relay 安全测试通过，三节点隔离 netns 同时直连/中继的 ICMP、TCP、UDP、底层抓包与路由清理实测通过。见 [M1 实现及验收证据](M1_IMPLEMENTATION.md)。
+M1 核心闭环通过；严格退出门尚未完全清零：MTU 边界、恶意 WG peer、endpoint roaming、完整路由冲突、长时间重连尚未验证/补强。非生产版本，未部署公网、未发布 release、未验证 Windows/macOS。当前没有 NAT 自动打洞、自动切换和管理服务。
+下一批：补齐 M1 安全与传输边界；随后推进 M2.1–M2.6：STUN/ICE 同 socket 传输、信令、动态 path 状态机、回退、重探测、真实 NAT 验收。参见 ROADMAP、DECISIONS、M1_IMPLEMENTATION。
+决策：WSS 先行、QUIC 可选；静态原型不增加外置中间件。依赖/项目许可证待最终复核。

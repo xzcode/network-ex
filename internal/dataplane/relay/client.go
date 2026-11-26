@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/gorilla/websocket"
+	"github.com/xzcode/network-ex/internal/platform/protect"
 	"net/url"
 	"os"
 	"sync"
@@ -16,6 +17,7 @@ import (
 )
 
 type Client struct {
+	Protect            protect.Protector
 	URL, Token, CAFile string
 	Key                ed25519.PrivateKey
 	mu                 sync.RWMutex
@@ -83,6 +85,9 @@ func (c *Client) session(ctx context.Context, deliver func([]byte)) error {
 		cfg.RootCAs = pool
 	}
 	d := websocket.Dialer{TLSClientConfig: cfg, HandshakeTimeout: 5 * time.Second}
+	if c.Protect != nil {
+		d.NetDialContext = c.Protect.Dial
+	}
 	ws, resp, e := d.DialContext(ctx, c.URL, nil)
 	if e != nil {
 		if resp != nil && resp.Body != nil {
@@ -91,6 +96,8 @@ func (c *Client) session(ctx context.Context, deliver func([]byte)) error {
 		return e
 	}
 	defer ws.Close()
+	stop := context.AfterFunc(ctx, func() { ws.Close() })
+	defer stop()
 	ws.SetReadLimit(MaxPacket)
 	ws.SetReadDeadline(time.Now().Add(5 * time.Second))
 	ws.SetWriteDeadline(time.Now().Add(5 * time.Second))

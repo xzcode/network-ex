@@ -25,6 +25,7 @@ import (
 	"github.com/xzcode/network-ex/internal/dataplane/tunnel"
 	"github.com/xzcode/network-ex/internal/platform/exitguard"
 	"github.com/xzcode/network-ex/internal/platform/localfile"
+	"github.com/xzcode/network-ex/internal/platform/protect"
 	control "github.com/xzcode/network-ex/pkg/protocol"
 	"golang.org/x/crypto/curve25519"
 )
@@ -70,6 +71,14 @@ func NewClient(server, ca string) (*Client, error) {
 type HTTPError struct{ Code int }
 
 func (e HTTPError) Error() string { return fmt.Sprintf("management HTTP %d", e.Code) }
+func (c *Client) SetProtector(p protect.Protector) {
+	if p == nil {
+		return
+	}
+	tr := c.http.Transport.(*http.Transport)
+	tr.DialContext = p.Dial
+	tr.Proxy = nil
+}
 func (c *Client) post(ctx context.Context, path string, in, out any) error {
 	b, e := json.Marshal(in)
 	if e != nil {
@@ -273,6 +282,7 @@ func (c *Client) Probe(ctx context.Context, nodes []control.RelayNode) []control
 }
 
 type Options struct {
+	External                      *tunnel.External
 	Ethernet                      bool
 	Discovery                     bool
 	ExitVia                       string
@@ -307,6 +317,9 @@ type LocalStatus struct {
 }
 
 func Run(ctx context.Context, o Options) (runErr error) {
+	if o.External != nil && (o.Ethernet || o.Discovery || len(o.AllowSubnets) > 0 || len(o.ExitTargets) > 0 || len(o.AllowExitTargets) > 0 || o.ExitVia != "" || o.DNSListen != "") {
+		return errors.New("unsupported mobile VPN option")
+	}
 	if o.Ethernet && (len(o.AllowSubnets) > 0 || len(o.ExitTargets) > 0 || len(o.AllowExitTargets) > 0 || o.ExitVia != "") {
 		return errors.New("Ethernet mode cannot provide subnet routing or exit gateways")
 	}
@@ -340,16 +353,21 @@ func Run(ctx context.Context, o Options) (runErr error) {
 	if e != nil {
 		return e
 	}
+	if o.External != nil {
+		c.SetProtector(o.External.Protect)
+	}
 	c.Discovery = o.Discovery
 	c.Ethernet = o.Ethernet
-	lock := filepath.Join(o.Dir, "run.lock")
-	f, e := os.OpenFile(lock, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if e != nil {
-		return fmt.Errorf("managed agent lock: %w", e)
+	if o.External == nil {
+		lock := filepath.Join(o.Dir, "run.lock")
+		f, e := os.OpenFile(lock, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if e != nil {
+			return fmt.Errorf("managed agent lock: %w", e)
+		}
+		fmt.Fprintln(f, os.Getpid())
+		f.Close()
+		defer os.Remove(lock)
 	}
-	fmt.Fprintln(f, os.Getpid())
-	f.Close()
-	defer os.Remove(lock)
 	u, e := url.Parse(state.Server)
 	if e != nil {
 		return e
@@ -415,6 +433,9 @@ func Run(ctx context.Context, o Options) (runErr error) {
 		probeClient, e = NewClient(state.Server, o.RelayCA)
 		if e != nil {
 			return e
+		}
+		if o.External != nil {
+			probeClient.SetProtector(o.External.Protect)
 		}
 	}
 	status := func(mode, err string) {
@@ -510,7 +531,7 @@ func Run(ctx context.Context, o Options) (runErr error) {
 				if applied != hash || stop == nil {
 					stopTunnel()
 					u, _ := url.Parse(state.Server)
-					cfg := tunnel.Config{Ethernet: snap.Ethernet, ManagedExit: true, NetworkCIDR: snap.NetworkCIDR, Exports: snap.Exports, ProtectHosts: []string{u.Hostname()}, Interface: o.Interface, IP: snap.Device.IP, ListenPort: o.Port, WGKeyFile: filepath.Join(o.Dir, "wg.key"), IdentityKeyFile: filepath.Join(o.Dir, "identity.key"), StatusFile: filepath.Join(o.Dir, "tunnel.json")}
+					cfg := tunnel.Config{External: o.External, Ethernet: snap.Ethernet, ManagedExit: true, NetworkCIDR: snap.NetworkCIDR, Exports: snap.Exports, ProtectHosts: []string{u.Hostname()}, Interface: o.Interface, IP: snap.Device.IP, ListenPort: o.Port, WGKeyFile: filepath.Join(o.Dir, "wg.key"), IdentityKeyFile: filepath.Join(o.Dir, "identity.key"), StatusFile: filepath.Join(o.Dir, "tunnel.json")}
 					if o.Discovery {
 						cfg.Discovery = snap.Discovery
 					}
@@ -528,6 +549,10 @@ func Run(ctx context.Context, o Options) (runErr error) {
 							targets = intersection(p.ExitTargets, o.ExitTargets)
 						}
 						served = intersection(p.ExitServed, o.AllowExitTargets)
+						if o.External != nil {
+							cfg.Peers = append(cfg.Peers, tunnel.Peer{Traffic: p.Traffic, IP: p.IP, PublicKey: p.WGKey, RelayURL: relayURL, RelayTokenFile: tokenPath, RelayCA: o.RelayCA})
+							continue
+						}
 						cfg.Peers = append(cfg.Peers, tunnel.Peer{Discovery: p.Discovery, ExitTargets: targets, ExitServed: served, Subnets: p.Subnets, Traffic: p.Traffic, IP: p.IP, PublicKey: p.WGKey, RelayURL: relayURL, RelayTokenFile: tokenPath, RelayCA: o.RelayCA, ICE: true, STUNURL: stunURL, ICEInterfaces: o.ICEInterfaces})
 					}
 					if e = tunnel.Check(cfg); e != nil {

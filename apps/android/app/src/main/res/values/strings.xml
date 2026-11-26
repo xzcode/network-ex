@@ -1,0 +1,27 @@
+<resources>
+ <string name="app_name">Network EX</string>
+ <string name="subtitle">Private network · relay transport</string>
+ <string name="server">Management server HTTPS URL</string>
+ <string name="device">Device name</string>
+ <string name="invite">One-time invitation</string>
+ <string name="ca">Private CA certificate (PEM, optional)</string>
+ <string name="enroll">Register device</string>
+ <string name="connect">Connect</string>
+ <string name="disconnect">Disconnect</string>
+ <string name="forget">Forget local identity</string>
+ <string name="forget_confirm">Delete this phone’s local device identity? This does not revoke it on the management server.</string>
+ <string name="pending">Registration submitted. Ask the network administrator to approve this device, then connect.</string>
+ <string name="no_profile">No registered device</string>
+ <string name="profile_ready">Registered device; connect to retrieve its current authorization.</string>
+ <string name="session_wait">Starting managed VPN…</string>
+ <string name="notification_title">Network EX private network</string>
+ <string name="notification_text">Managed VPN service is running</string>
+ <string name="permission_denied">VPN permission was not granted</string>
+ <string name="not_full_vpn">This version routes authorized private device addresses only. Other traffic uses your normal network. It is not a full Internet VPN.</string>
+ <string name="status">Network status</string>
+ <string name="peers">Authorized peers</string>
+ <string name="ok">OK</string>
+ <string name="cancel">Cancel</string>
+ <string name="busy">Working…</string>
+ <string name="stopping">Stopping previous VPN; try again after it exits.</string>
+</resources>

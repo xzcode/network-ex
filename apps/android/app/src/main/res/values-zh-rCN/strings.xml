@@ -1,0 +1,27 @@
+<resources>
+ <string name="app_name">Network EX</string>
+ <string name="subtitle">私有虚拟网络 · 中继传输</string>
+ <string name="server">管理服务 HTTPS 地址</string>
+ <string name="device">设备名称</string>
+ <string name="invite">一次性邀请码</string>
+ <string name="ca">私有 CA 证书（PEM，可选）</string>
+ <string name="enroll">注册设备</string>
+ <string name="connect">连接</string>
+ <string name="disconnect">断开</string>
+ <string name="forget">忘记本机身份</string>
+ <string name="forget_confirm">确认删除本机设备身份？此操作不会撤销管理端设备。</string>
+ <string name="pending">注册已提交，请管理员批准本设备，然后连接。</string>
+ <string name="no_profile">尚未注册设备</string>
+ <string name="profile_ready">设备已注册，连接后获取当前授权。</string>
+ <string name="session_wait">正在启动虚拟网络…</string>
+ <string name="notification_title">Network EX 私有网络</string>
+ <string name="notification_text">后台虚拟网络服务运行中</string>
+ <string name="permission_denied">未授予 VPN 权限</string>
+ <string name="not_full_vpn">当前仅接管获准的私有设备地址，其他流量仍使用原有网络。本版本不是全流量互联网 VPN。</string>
+ <string name="status">网络状态</string>
+ <string name="peers">已授权设备</string>
+ <string name="ok">确认</string>
+ <string name="cancel">取消</string>
+ <string name="busy">处理中…</string>
+ <string name="stopping">正在停止旧的 VPN，请稍后重试。</string>
+</resources>

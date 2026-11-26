@@ -27,12 +27,20 @@ import (
 	"github.com/xzcode/network-ex/internal/dataplane/relay"
 	"github.com/xzcode/network-ex/internal/dataplane/transport"
 	"github.com/xzcode/network-ex/internal/platform/localfile"
+	"github.com/xzcode/network-ex/internal/platform/protect"
 	platform "github.com/xzcode/network-ex/internal/platform/tun"
 	"golang.zx2c4.com/wireguard/device"
 	wgtun "golang.zx2c4.com/wireguard/tun"
 )
 
+// External is an OS-owned VPN adapter; no shell/network administration
+// commands may execute when this path is selected.
+type External struct {
+	Open    func(context.Context, netip.Addr, []netip.Prefix) (wgtun.Device, error)
+	Protect protect.Protector
+}
 type Config struct {
+	External        *External                `json:"-"`
 	Ethernet        bool                     `json:"-"`
 	Discovery       protocol.DiscoveryPolicy `json:"-"`
 	NetworkCIDR     string                   `json:"-"`
@@ -276,6 +284,9 @@ func prepare(c Config) (netip.Addr, []transport.Peer, []netip.Addr, string, erro
 				return bad(e)
 			}
 			t.Relay = &relay.Client{URL: p.RelayURL, Token: strings.TrimSpace(string(token)), CAFile: p.RelayCA, Key: ed25519.PrivateKey(k)}
+			if c.External != nil {
+				t.Relay.Protect = c.External.Protect
+			}
 			if p.ICE {
 				t.ICE = &path.ICE{Relay: t.Relay, STUN: p.STUNURL, Interface: c.Interface, Excluded: used, ExcludedPrefixes: ethernetExclusions(c, remote), Interfaces: p.ICEInterfaces}
 			} else if p.STUNURL != "" || len(p.ICEInterfaces) > 0 {
@@ -345,7 +356,27 @@ func checkEthernet(c Config) (netip.Prefix, error) {
 	}
 	return p, c.Discovery.Validate(c.NetworkCIDR)
 }
+func checkExternal(c Config) error {
+	if c.External == nil {
+		return nil
+	}
+	if c.External.Open == nil || c.External.Protect == nil {
+		return errors.New("native VPN open/protection callback required")
+	}
+	if c.Ethernet || len(c.Exports) > 0 || len(c.Discovery.Rules) > 0 {
+		return errors.New("mobile VPN supports only IPv4 overlay unicast")
+	}
+	for _, p := range c.Peers {
+		if p.Direct != "" || p.ICE || len(p.Subnets)+len(p.ExitServed)+len(p.ExitTargets) > 0 {
+			return errors.New("mobile VPN requires relay-only overlay peers")
+		}
+	}
+	return nil
+}
 func Check(c Config) error {
+	if e := checkExternal(c); e != nil {
+		return e
+	}
 	if _, e := checkEthernet(c); e != nil {
 		return e
 	}
@@ -370,8 +401,11 @@ func Check(c Config) error {
 var setupMu sync.Mutex
 
 func Run(ctx context.Context, c Config) error {
-	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+	if c.External == nil && runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
 		return errors.New("unsupported platform")
+	}
+	if e := checkExternal(c); e != nil {
+		return e
 	}
 	ip, peers, routes, u, e := prepare(c)
 	if e != nil {
@@ -380,6 +414,9 @@ func Run(ctx context.Context, c Config) error {
 	b, e := transport.New(peers)
 	if e != nil {
 		return e
+	}
+	if c.External != nil {
+		b.Protect = c.External.Protect
 	}
 	own, remote, scopedPeers, e := scopes(c)
 	if e != nil {
@@ -393,7 +430,14 @@ func Run(ctx context.Context, c Config) error {
 	if e != nil {
 		return e
 	}
-	if e = protectUnderlay(ctx, c, ethernetExclusions(c, remote)); e != nil {
+	protected := ethernetExclusions(c, remote)
+	if c.External != nil {
+		for _, a := range routes {
+			protected = append(protected, netip.PrefixFrom(a, 32))
+		}
+		protected = append(protected, netip.PrefixFrom(ip, 32))
+	}
+	if e = protectUnderlay(ctx, c, protected); e != nil {
 		return e
 	}
 	setupMu.Lock()
@@ -406,30 +450,38 @@ func Run(ctx context.Context, c Config) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	var served, targets []netip.Prefix
-	for _, p := range c.Peers {
-		a, _ := protocol.ValidateExitTargets(p.ExitServed)
-		served = append(served, a...)
-		a, _ = protocol.ValidateExitTargets(p.ExitTargets)
-		targets = append(targets, a...)
-	}
-	if e = platform.PreflightExit(served, targets); e != nil {
-		return e
-	}
-	if e = platform.PreflightSubnets(c.Interface, own[1:], remote); e != nil {
-		return e
-	}
 	var t wgtun.Device
-	if c.Ethernet {
-		if e = platform.PreflightEthernet(c.Interface, ethPrefix); e != nil {
-			return e
+	if c.External != nil {
+		rs := []netip.Prefix{}
+		for _, a := range routes {
+			rs = append(rs, netip.PrefixFrom(a, 32))
 		}
-		t, e = platform.CreateEthernet(c.Interface)
+		t, e = c.External.Open(ctx, ip, rs)
 	} else {
-		if e = platform.Preflight(c.Interface, ip, routes); e != nil {
+		var served, targets []netip.Prefix
+		for _, p := range c.Peers {
+			a, _ := protocol.ValidateExitTargets(p.ExitServed)
+			served = append(served, a...)
+			a, _ = protocol.ValidateExitTargets(p.ExitTargets)
+			targets = append(targets, a...)
+		}
+		if e = platform.PreflightExit(served, targets); e != nil {
 			return e
 		}
-		t, e = wgtun.CreateTUN(c.Interface, 1280)
+		if e = platform.PreflightSubnets(c.Interface, own[1:], remote); e != nil {
+			return e
+		}
+		if c.Ethernet {
+			if e = platform.PreflightEthernet(c.Interface, ethPrefix); e != nil {
+				return e
+			}
+			t, e = platform.CreateEthernet(c.Interface)
+		} else {
+			if e = platform.Preflight(c.Interface, ip, routes); e != nil {
+				return e
+			}
+			t, e = wgtun.CreateTUN(c.Interface, 1280)
+		}
 	}
 	if e != nil {
 		return e
@@ -474,24 +526,28 @@ func Run(ctx context.Context, c Config) error {
 	if name != c.Interface && !(runtime.GOOS == "darwin" && c.Interface == "utun" && regexp.MustCompile("^utun[0-9]+$").MatchString(name)) {
 		return errors.New("unexpected TUN name")
 	}
-	defer platform.Cleanup(name, ip, routes)
+	if c.External == nil {
+		defer platform.Cleanup(name, ip, routes)
+	}
 	if e = dev.IpcSet(u); e != nil {
 		return e
 	}
-	if c.Ethernet {
-		if e = platform.ConfigureEthernet(name, ip, ethPrefix); e != nil {
+	if c.External == nil {
+		if c.Ethernet {
+			if e = platform.ConfigureEthernet(name, ip, ethPrefix); e != nil {
+				return e
+			}
+		} else {
+			if e = platform.Configure(name, ip, routes); e != nil {
+				return e
+			}
+			if e = platform.ConfigureSubnets(name, remote); e != nil {
+				return e
+			}
+		}
+		if e = platform.ConfigureDiscovery(name, ip, c.Discovery.Rules); e != nil {
 			return e
 		}
-	} else {
-		if e = platform.Configure(name, ip, routes); e != nil {
-			return e
-		}
-		if e = platform.ConfigureSubnets(name, remote); e != nil {
-			return e
-		}
-	}
-	if e = platform.ConfigureDiscovery(name, ip, c.Discovery.Rules); e != nil {
-		return e
 	}
 	setupMu.Unlock()
 	setupLocked = false
@@ -537,6 +593,13 @@ func Run(ctx context.Context, c Config) error {
 			if peers[i].Relay != nil {
 				ps.Mode = "relay-configured"
 				ps.RelayConnected = peers[i].Relay.Ready()
+				if c.External != nil {
+					if ps.RelayConnected {
+						ps.Mode = "relay-fallback"
+					} else {
+						ps.Mode = "unavailable"
+					}
+				}
 				if peers[i].ICE != nil {
 					snap := peers[i].ICE.Snapshot()
 					ps.ICE = &snap

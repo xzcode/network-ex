@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"errors"
+	"github.com/xzcode/network-ex/internal/platform/protect"
 	"net"
 	"net/netip"
 	"sync"
@@ -39,6 +40,7 @@ type active struct {
 	wg       sync.WaitGroup
 }
 type Bind struct {
+	Protect  protect.Protector
 	mu       sync.RWMutex
 	peers    map[netip.AddrPort]Peer
 	byDirect map[netip.AddrPort]netip.AddrPort
@@ -84,9 +86,25 @@ func (b *Bind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
 	if b.a != nil || b.closing {
 		return nil, 0, conn.ErrBindAlreadyOpen
 	}
-	s, e := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: int(port)})
-	if e != nil {
-		return nil, 0, e
+	var s *net.UDPConn
+	if b.Protect != nil {
+		lc := net.ListenConfig{Control: b.Protect.Control}
+		pc, e := lc.ListenPacket(context.Background(), "udp4", (&net.UDPAddr{IP: net.IPv4zero, Port: int(port)}).String())
+		if e != nil {
+			return nil, 0, e
+		}
+		var ok bool
+		s, ok = pc.(*net.UDPConn)
+		if !ok {
+			pc.Close()
+			return nil, 0, errors.New("expected UDP listener")
+		}
+	} else {
+		var e error
+		s, e = net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: int(port)})
+		if e != nil {
+			return nil, 0, e
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &active{sock: s, ctx: ctx, cancel: cancel, incoming: make(chan packet, 128)}

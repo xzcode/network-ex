@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [master]
-    paths: ['.github/workflows/desktop-build.yml']
+    paths: ['.github/workflows/desktop-build.yml', 'apps/desktop/package-lock.json']
 permissions:
   contents: read
 concurrency:
@@ -44,6 +44,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
@@ -61,7 +62,7 @@ jobs:
         run: node scripts/build-desktop-sidecar.mjs ${{ matrix.target }}
       - name: Install frontend dependencies
         working-directory: apps/desktop
-        run: npm ci
+        run: npm ci --registry=https://registry.npmjs.org --no-audit --no-fund --fetch-retries=2
       - name: Compile and package desktop
         working-directory: apps/desktop
         shell: bash

@@ -1,6 +1,6 @@
 {
   "name": "network-ex-desktop",
-  "version": "0.4.0-dev-m4",
+  "version": "0.9.0-dev-m9",
   "private": true,
   "type": "module",
   "scripts": {

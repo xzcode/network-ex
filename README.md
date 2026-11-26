@@ -2,7 +2,7 @@
 
 自主开发的跨平台虚拟局域网工具：端到端加密、P2P 直连优先、中继兜底、完全自托管。
 
-当前状态：0.8.0-dev-m8。Linux 组网核心及移动端共享 Go 数据面实测通过；Android 原生客户端源码与 Java binding 已完成初版，尚未构建 APK 或真机验收，iOS 为设计阶段。详见 [M8 实现与验收](docs/M8_IMPLEMENTATION.md)、[Android 构建](apps/android/README.md)、[阶段状态](docs/STATUS.md)。
+当前状态：0.8.1-dev-m8。Linux 组网核心及移动端共享数据面实测通过，Android ARM64/x64 Debug APK 已实际构建并通过签名与 16 KiB 静态对齐检查；Android 真机、iOS、原生桌面安装及生产验收待完成。详见 [M8b 实现与验收](docs/M8B_IMPLEMENTATION.md)、[Android 构建](apps/android/README.md)、[阶段状态](docs/STATUS.md)。
 
 ## 构建
 Go 1.23；服务端需 CGO/C 编译器，Agent 支持 CGO_ENABLED=0。桌面 Vue/Tauri 工程位于 apps/desktop，详见 M4 文档。

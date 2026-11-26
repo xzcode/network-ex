@@ -13,6 +13,7 @@ import (
 	"github.com/pion/ice/v2"
 	"github.com/pion/stun"
 	"github.com/xzcode/network-ex/internal/dataplane/relay"
+	"github.com/xzcode/network-ex/internal/platform/protect"
 )
 
 type Snapshot struct {
@@ -150,6 +151,13 @@ func (p *ICE) session(parent context.Context, deliver func([]byte)) error {
 			return e
 		}
 		cfg.Urls = []*stun.URI{u}
+	}
+	if p.Relay.Protect != nil {
+		n, e := protect.NewICENet(p.Relay.Protect)
+		if e != nil {
+			return e
+		}
+		cfg.Net = n
 	}
 	a, e := ice.NewAgent(cfg)
 	if e != nil {

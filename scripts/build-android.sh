@@ -15,7 +15,11 @@ export GOBIN="$toolbin";export PATH="$toolbin:$PATH"
 go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20240520174638-fa72addaaa1b
 go install golang.org/x/mobile/cmd/gobind@v0.0.0-20240520174638-fa72addaaa1b
 cd "$root"
-gomobile bind -target=android/arm64,android/amd64 -androidapi=26 -o apps/android/app/libs/network-ex-mobile.aar ./pkg/mobile
+# anet v0.0.3 (Pion dependency) references net.zoneCache on Android.
+# Keep this compatibility workaround Android-only and re-evaluate on upgrade.
+# https://github.com/wlynxg/anet/issues/11
+gomobile bind -ldflags="-checklinkname=0 -extldflags=-Wl,-z,max-page-size=16384,-z,common-page-size=16384" -target=android/arm64,android/amd64 -androidapi=26 -o apps/android/app/libs/network-ex-mobile.aar ./pkg/mobile
 cd apps/android
-gradle --no-daemon :app:assembleDebug
+gradle --no-daemon --max-workers=2 :app:assembleDebug
+bash "$root/scripts/verify-android-apk.sh" "$root/apps/android/app/build/outputs/apk/debug/app-debug.apk"
 echo "Debug APK: $root/apps/android/app/build/outputs/apk/debug/app-debug.apk"

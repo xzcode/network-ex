@@ -1,6 +1,6 @@
 // Package mobile exposes the narrowly scoped native VPN integration.
-// It deliberately has no root operations, shell commands, or unprotected
-// direct ICE sockets in its initial Android transport.
+// It deliberately has no root operations, shell commands or unprotected
+// direct ICE sockets.
 package mobile
 
 import (
@@ -43,7 +43,7 @@ type Session struct {
 	err      string
 }
 
-func Version() string                { return "0.8.0-dev-m8" }
+func Version() string                { return "0.8.1-dev-m8" }
 func NewSession(p Platform) *Session { return &Session{platform: p} }
 func checkedRoot(root string) (string, error) {
 	p, e := filepath.Abs(root)
@@ -119,7 +119,11 @@ func HasProfile(root string) bool {
 	_, e = managed.Load(filepath.Join(root, "device"))
 	return e == nil
 }
-func (s *Session) Start(root string) error {
+func (s *Session) Start(root string) error { return s.StartWithDirect(root, false) }
+
+// StartWithDirect explicitly opts into protected UDP ICE with WSS fallback.
+// Mobile platform permission and native-network changes still need real-device validation.
+func (s *Session) StartWithDirect(root string, direct bool) error {
 	root, e := checkedRoot(root)
 	if e != nil {
 		return e
@@ -155,7 +159,7 @@ func (s *Session) Start(root string) error {
 	s.err = ""
 	// Native OpenTunnel may call into platform APIs; never hold session mutex
 	// while invoking it or when waiting for a session to finish.
-	ext := &tunnel.External{
+	ext := &tunnel.External{AllowICE: direct,
 		Protect: protect.Protector(func(fd int) bool { return s.platform.ProtectSocket(int32(fd)) }),
 		Open: func(ctx context.Context, ip netip.Addr, routes []netip.Prefix) (wgtun.Device, error) {
 			spec := tunnelSpec{Address: ip.String(), MTU: 1280, Routes: []string{}}

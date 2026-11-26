@@ -18,6 +18,7 @@ import mobile.Session;
 /** One app-private VPN session. No root or global default route changes. */
 public final class NetworkExVpnService extends VpnService {
     static final String CONNECT = "com.xzcode.networkex.CONNECT";
+    static final String DIRECT = "direct";
     static final String DISCONNECT = "com.xzcode.networkex.DISCONNECT";
     private static final String CHANNEL = "network_ex_vpn";
     private static final int NOTIFICATION = 801;
@@ -29,6 +30,9 @@ public final class NetworkExVpnService extends VpnService {
     private ConnectivityManager connectivity;
     private ConnectivityManager.NetworkCallback networkCallback;
     private Network lastNetwork;
+    private String lastLinkSignature="";
+    private boolean allowDirect;
+    private java.util.concurrent.ScheduledFuture<?> pendingRefresh;
     private volatile Session owned;
     private volatile boolean destroyed;
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -67,6 +71,7 @@ public final class NetworkExVpnService extends VpnService {
             stopSelf(); return START_NOT_STICKY;
         }
         synchronized(SERVICE_LOCK){if (desired) return START_NOT_STICKY; desired = true;}
+        allowDirect=intent.getBooleanExtra(DIRECT,false);
         serviceError = "";
         worker.execute(() -> {
             try {
@@ -74,10 +79,11 @@ public final class NetworkExVpnService extends VpnService {
                 if (old != null && !old.waitStopped(0)) { old.stop(); if (!old.waitStopped(15000)) throw new IllegalStateException(getString(R.string.stopping)); }
                 if (!desired || destroyed) return;
                 lastNetwork = connectivity.getActiveNetwork();
+                lastLinkSignature = linkSignature(lastNetwork);
                 Session next = Mobile.newSession(new AndroidPlatform());
                 owned = next;
                 session = next;
-                next.start(ProfileStore.root(this));
+                next.startWithDirect(ProfileStore.root(this),allowDirect);
                 if(!desired||destroyed)next.stop();
             } catch (Exception e) { fail(e); }
         });
@@ -111,7 +117,7 @@ public final class NetworkExVpnService extends VpnService {
             @Override public void onLinkPropertiesChanged(Network n, LinkProperties lp) { changed(); }
             private void changed() {
                 if (!desired || destroyed) return;
-                try { worker.schedule(NetworkExVpnService.this::refreshUnderlay, 1500, TimeUnit.MILLISECONDS); }
+                try { synchronized(NetworkExVpnService.this){if(pendingRefresh!=null)pendingRefresh.cancel(false);pendingRefresh=worker.schedule(NetworkExVpnService.this::refreshUnderlay,1500,TimeUnit.MILLISECONDS);} }
                 catch (java.util.concurrent.RejectedExecutionException ignored) {}
             }
         };
@@ -124,16 +130,23 @@ public final class NetworkExVpnService extends VpnService {
     private void refreshUnderlay() {
         if (!desired || destroyed) return;
         Network current = connectivity.getActiveNetwork();
-        if (java.util.Objects.equals(current, lastNetwork)) return;
-        lastNetwork = current;
+        String signature=linkSignature(current);
+        if (java.util.Objects.equals(current, lastNetwork)&&signature.equals(lastLinkSignature)) return;
+        lastNetwork = current;lastLinkSignature=signature;
         Session s = owned;
         if (s == null || s.waitStopped(0)) return;
         // Re-open protected sockets and refresh authorization on an underlay change.
         s.stop();
         if (!s.waitStopped(15000)) { fail(new IllegalStateException(getString(R.string.stopping))); return; }
         if (desired && !destroyed) {
-            try { s.start(ProfileStore.root(this)); } catch (Exception e) { fail(e); }
+            try { s.startWithDirect(ProfileStore.root(this),allowDirect); } catch (Exception e) { fail(e); }
         }
+    }
+    private String linkSignature(Network n) {
+        if(n==null)return "";
+        LinkProperties lp=connectivity.getLinkProperties(n);
+        if(lp==null)return "";
+        return String.valueOf(lp.getInterfaceName())+"|"+lp.getLinkAddresses()+"|"+lp.getRoutes()+"|"+lp.getDnsServers();
     }
     private void fail(Exception e) {
         serviceError = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
@@ -151,6 +164,7 @@ public final class NetworkExVpnService extends VpnService {
     @Override public void onRevoke() { requestStop(); super.onRevoke(); }
     @Override public void onDestroy() {
         destroyed = true; desired = false;
+        synchronized(this){if(pendingRefresh!=null)pendingRefresh.cancel(false);}
         if (networkCallback != null) { try { connectivity.unregisterNetworkCallback(networkCallback); } catch (RuntimeException ignored) {} }
         Session s = owned; if (s != null) s.stop();
         worker.shutdownNow();

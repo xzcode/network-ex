@@ -550,7 +550,11 @@ func Run(ctx context.Context, o Options) (runErr error) {
 						}
 						served = intersection(p.ExitServed, o.AllowExitTargets)
 						if o.External != nil {
-							cfg.Peers = append(cfg.Peers, tunnel.Peer{Traffic: p.Traffic, IP: p.IP, PublicKey: p.WGKey, RelayURL: relayURL, RelayTokenFile: tokenPath, RelayCA: o.RelayCA})
+							mobileSTUN := ""
+							if o.External.AllowICE {
+								mobileSTUN = stunURL
+							}
+							cfg.Peers = append(cfg.Peers, tunnel.Peer{Traffic: p.Traffic, IP: p.IP, PublicKey: p.WGKey, RelayURL: relayURL, RelayTokenFile: tokenPath, RelayCA: o.RelayCA, ICE: o.External.AllowICE, STUNURL: mobileSTUN})
 							continue
 						}
 						cfg.Peers = append(cfg.Peers, tunnel.Peer{Discovery: p.Discovery, ExitTargets: targets, ExitServed: served, Subnets: p.Subnets, Traffic: p.Traffic, IP: p.IP, PublicKey: p.WGKey, RelayURL: relayURL, RelayTokenFile: tokenPath, RelayCA: o.RelayCA, ICE: true, STUNURL: stunURL, ICEInterfaces: o.ICEInterfaces})

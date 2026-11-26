@@ -36,8 +36,9 @@ import (
 // External is an OS-owned VPN adapter; no shell/network administration
 // commands may execute when this path is selected.
 type External struct {
-	Open    func(context.Context, netip.Addr, []netip.Prefix) (wgtun.Device, error)
-	Protect protect.Protector
+	AllowICE bool
+	Open     func(context.Context, netip.Addr, []netip.Prefix) (wgtun.Device, error)
+	Protect  protect.Protector
 }
 type Config struct {
 	External        *External                `json:"-"`
@@ -367,8 +368,8 @@ func checkExternal(c Config) error {
 		return errors.New("mobile VPN supports only IPv4 overlay unicast")
 	}
 	for _, p := range c.Peers {
-		if p.Direct != "" || p.ICE || len(p.Subnets)+len(p.ExitServed)+len(p.ExitTargets) > 0 {
-			return errors.New("mobile VPN requires relay-only overlay peers")
+		if p.Direct != "" || (p.ICE && !c.External.AllowICE) || len(p.Subnets)+len(p.ExitServed)+len(p.ExitTargets) > 0 {
+			return errors.New("mobile VPN requires managed overlay peers and explicit protected ICE opt-in")
 		}
 	}
 	return nil

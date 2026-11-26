@@ -24,6 +24,7 @@ public final class MainActivity extends Activity {
     private EditText server,name,invite,ca;
     private TextView status,peers,message;
     private Button enroll,connect,disconnect,forget;
+    private CheckBox direct;
     private LinearLayout enrollment;
     private String root;
     private boolean busy;
@@ -41,6 +42,9 @@ public final class MainActivity extends Activity {
         invite=field(enrollment,R.string.invite,InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);
         ca=field(enrollment,R.string.ca,InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE);ca.setMinLines(2);
         enroll=button(enrollment,R.string.enroll);enroll.setOnClickListener(v->enroll());
+        direct=new CheckBox(this);direct.setText(R.string.direct_experimental);
+        direct.setChecked(getPreferences(MODE_PRIVATE).getBoolean("direct",false));content.addView(direct);
+        direct.setOnCheckedChangeListener((b,checked)->getPreferences(MODE_PRIVATE).edit().putBoolean("direct",checked).apply());
         LinearLayout actions=new LinearLayout(this);actions.setOrientation(LinearLayout.HORIZONTAL);content.addView(actions);
         connect=button(actions,R.string.connect);disconnect=button(actions,R.string.disconnect);
         connect.setOnClickListener(v->prepareConnection());disconnect.setOnClickListener(v->stopService(new Intent(this,NetworkExVpnService.class)));
@@ -71,7 +75,7 @@ public final class MainActivity extends Activity {
     @Override protected void onActivityResult(int code,int result,Intent data){super.onActivityResult(code,result,data);if(code==REQUEST_VPN){if(result==RESULT_OK)beginConnection();else message.setText(R.string.permission_denied);}}
     private void beginConnection(){
         if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},802);
-        try{startForegroundService(new Intent(this,NetworkExVpnService.class).setAction(NetworkExVpnService.CONNECT));message.setText(R.string.session_wait);}catch(RuntimeException e){message.setText(e.getMessage());}
+        try{startForegroundService(new Intent(this,NetworkExVpnService.class).setAction(NetworkExVpnService.CONNECT).putExtra(NetworkExVpnService.DIRECT,direct.isChecked()));message.setText(R.string.session_wait);}catch(RuntimeException e){message.setText(e.getMessage());}
     }
     private void confirmForget(){
         if(busy||NetworkExVpnService.active()||root==null)return;
@@ -84,7 +88,7 @@ public final class MainActivity extends Activity {
         boolean profile=root!=null&&Mobile.hasProfile(root),active=NetworkExVpnService.active();
         enrollment.setVisibility(profile?View.GONE:View.VISIBLE);
         enroll.setEnabled(root!=null&&!busy&&!active&&!profile);connect.setEnabled(profile&&!busy&&!active);disconnect.setEnabled(active);
-        forget.setEnabled(root!=null&&!busy&&!active);
+        forget.setEnabled(root!=null&&!busy&&!active);direct.setEnabled(!active&&!busy);
         try{
             JSONObject s=new JSONObject(profile?NetworkExVpnService.status():"{}"),m=s.optJSONObject("managed"),t=s.optJSONObject("tunnel");
             StringBuilder out=new StringBuilder(profile?getString(R.string.profile_ready):getString(R.string.no_profile));

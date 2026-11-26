@@ -4,3 +4,5 @@ local.properties
 app/libs/*.aar
 *.jks
 *.keystore
+
+app/libs/*.jar

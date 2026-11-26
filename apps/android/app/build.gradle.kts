@@ -2,12 +2,14 @@ plugins { id("com.android.application") }
 android {
  namespace = "com.xzcode.networkex"
  compileSdk = 35
+ buildToolsVersion = "35.0.0"
+ packaging { jniLibs { useLegacyPackaging = false } }
  defaultConfig {
   applicationId = "com.xzcode.networkex"
   minSdk = 26
   targetSdk = 35
-  versionCode = 800
-  versionName = "0.8.0-dev-m8"
+  versionCode = 801
+  versionName = "0.8.1-dev-m8"
  }
  compileOptions {
   sourceCompatibility = JavaVersion.VERSION_17

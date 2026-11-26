@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # M8 shared mobile core: real Linux native fd fixture, not an Android emulator.
-if [[ "${1:-}" != inside ]]; then exec unshare --net -- "$0" inside "${2:-$(pwd)/bin}" "${3:-all}"; fi
+if [[ "${1:-}" != inside ]]; then exec unshare --net -- "$0" inside "${2:-$(pwd)/bin}" "${3:-all}" "${4:-relay}"; fi
 BIN="$2"; MODE="${3:-all}"; A="$BIN/network-ex-agent"; S="$BIN/network-ex-server"
 [[ "$MODE" == all || "$MODE" == split ]]
 D="$(mktemp -d)"; export D
 M="$BIN/mobile-fixture"
+DIRECT_TEST="${4:-relay}"
 declare -a pids=()
 cleanup(){ for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done; for p in "${pids[@]}"; do wait "$p" 2>/dev/null || true; done; rm -rf "$D"; }
 trap cleanup EXIT
@@ -24,8 +25,17 @@ done
 nsenter -t "$pa" -n ip addr add 192.0.2.2/24 dev na
 nsenter -t "$pb" -n ip addr add 192.0.2.3/24 dev nb
 nsenter -t "$pc" -n ip addr add 192.0.2.4/24 dev nc
-nsenter -t "$pc" -n iptables -I OUTPUT 1 -o nc -p udp -j DROP
-nsenter -t "$pc" -n iptables -I INPUT 1 -i nc -p udp -j DROP
+block_mobile_udp(){
+ nsenter -t "$pc" -n iptables -I OUTPUT 1 -o nc -p udp -j DROP
+ nsenter -t "$pc" -n iptables -I INPUT 1 -i nc -p udp -j DROP
+}
+unblock_mobile_udp(){
+ nsenter -t "$pc" -n iptables -D OUTPUT -o nc -p udp -j DROP
+ nsenter -t "$pc" -n iptables -D INPUT -i nc -p udp -j DROP
+}
+block_mobile_udp
+mobile_flags=()
+if [[ "$DIRECT_TEST" == direct ]];then mobile_flags=(-direct);fi
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=192.0.2.1 -addext subjectAltName=IP:192.0.2.1 -keyout "$D/tls.key" -out "$D/tls.crt" >/dev/null 2>&1
 "$S" issuer-keygen -out "$D/issuer.key" > "$D/issuer.pub"
 printf '%s\n' 'm3-test-strong-local-password' > "$D/password"
@@ -122,7 +132,7 @@ if nsenter -t "$pc" -n ip link show nxmobile0 >/dev/null 2>&1;then echo "FAIL: r
 kill "$deny";wait "$deny"
 grep -Eq 'protected=[1-9][0-9]* opened=0' "$D/deny.log"
 echo "PASS: rejected platform socket protection blocks network setup"
-nsenter -t "$pc" -n "$M" run -root "$D/c-root" >"$D/c.log" 2>&1 & agentc=$!;pids+=("$agentc")
+nsenter -t "$pc" -n "$M" run -root "$D/c-root" "${mobile_flags[@]}" >"$D/c.log" 2>&1 & agentc=$!;pids+=("$agentc")
 state(){ local statepath="$D/$1/managed.json"; [[ "$1" != c ]]||statepath="$D/c-root/device/managed.json";python3 - "$statepath" <<'PY'
 import json,sys
 try:print(json.load(open(sys.argv[1]))["state"])
@@ -144,7 +154,7 @@ echo "Assigned: a=$ipa b=$ipb c=$ipc"
 waitping(){ local p="$1" ip="$2" tries="$3";for ((j=0;j<tries;j++));do if nsenter -t "$p" -n ping -c1 -W1 "$ip" >/dev/null 2>&1;then return 0;fi;sleep 1;done;echo "FAIL: unreachable $ip";dump;return 1;}
 waitping "$pa" "$ipb" 35
 waitping "$pa" "$ipc" 25
-pathmode(){ python3 - "$D/$1/tunnel.json" "$2" <<'PY'
+pathmode(){ local status="$D/$1/tunnel.json";[[ "$1" != c ]]||status="$D/c-root/device/tunnel.json";python3 - "$status" "$2" <<'PY'
 import json,sys
 try:print(next(p["mode"] for p in json.load(open(sys.argv[1]))["peers"] if p["ip"]==sys.argv[2]))
 except (OSError,ValueError,StopIteration,TypeError):print("unavailable")
@@ -189,9 +199,27 @@ PY
 kill "$agentc";wait "$agentc"
 grep -Eq 'protected=[1-9][0-9]* opened=[1-9][0-9]*' "$D/c.log"
 if nsenter -t "$pc" -n ip link show nxmobile0 >/dev/null 2>&1;then echo "FAIL: native VPN leaked on stop";exit 1;fi
-nsenter -t "$pc" -n "$M" run -root "$D/c-root" >"$D/c.log" 2>&1 & agentc=$!;pids+=("$agentc")
+nsenter -t "$pc" -n "$M" run -root "$D/c-root" "${mobile_flags[@]}" >"$D/c.log" 2>&1 & agentc=$!;pids+=("$agentc")
 waitping "$pa" "$ipc" 35
 echo "PASS: native session stop closes fd and restart restores connectivity"
+if [[ "$DIRECT_TEST" == direct ]];then
+ unblock_mobile_udp
+ for j in {1..70};do [[ "$(pathmode a "$ipc")" == ice-selected && "$(pathmode c "$ipa")" == ice-selected ]]&&break;sleep 1;done
+ [[ "$(pathmode a "$ipc")" == ice-selected && "$(pathmode c "$ipa")" == ice-selected ]]||{ dump;exit 1; }
+ waitping "$pa" "$ipc" 20
+ nsenter -t "$pa" -n python3 - "$ipc" <<'PY2'
+import socket,sys
+for typ,port in [(socket.SOCK_STREAM,19002),(socket.SOCK_DGRAM,19001)]:
+ with socket.socket(socket.AF_INET,typ) as s:
+  s.settimeout(8);s.connect((sys.argv[1],port));s.sendall(b"protected-direct");assert s.recv(1024)==b"protected-direct"
+PY2
+ echo "PASS: protected native ICE selected at both ends, real TCP/UDP"
+ block_mobile_udp
+ for j in {1..25};do [[ "$(pathmode a "$ipc")" == relay-fallback && "$(pathmode c "$ipa")" == relay-fallback ]]&&break;sleep 1;done
+ [[ "$(pathmode a "$ipc")" == relay-fallback && "$(pathmode c "$ipa")" == relay-fallback ]]||{ dump;exit 1; }
+ waitping "$pa" "$ipc" 20
+ echo "PASS: protected native ICE failure returns to WSS relay"
+fi
 python3 "$D/api.py" mobile-revoke
 for j in {1..20};do if ! kill -0 "$agentc" 2>/dev/null;then break;fi;sleep 1;done
 if kill -0 "$agentc" 2>/dev/null;then dump;echo "FAIL: revoked mobile still running";exit 1;fi

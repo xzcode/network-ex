@@ -96,6 +96,7 @@ func run() error {
 	invite := f.String("invite-file", "", "test invite file")
 	ca := f.String("ca", "", "test CA")
 	deny := f.Bool("deny-protect", false, "negative test")
+	direct := f.Bool("direct", false, "enable protected ICE")
 	if e := f.Parse(os.Args[2:]); e != nil {
 		return e
 	}
@@ -122,7 +123,7 @@ func run() error {
 	case "run":
 		p := &fixture{allow: !*deny}
 		s := mobile.NewSession(p)
-		if e := s.Start(*root); e != nil {
+		if e := s.StartWithDirect(*root, *direct); e != nil {
 			return e
 		}
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)

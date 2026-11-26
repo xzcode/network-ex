@@ -223,6 +223,9 @@ func (c *Client) Exchange(ctx context.Context, offer Offer) (*websocket.Conn, Si
 		cfg.RootCAs = pool
 	}
 	d := websocket.Dialer{TLSClientConfig: cfg, HandshakeTimeout: 5 * time.Second}
+	if c.Protect != nil {
+		d.NetDialContext = c.Protect.Dial
+	}
 	ws, resp, e := d.DialContext(ctx, u.String(), nil)
 	if e != nil {
 		if resp != nil && resp.Body != nil {

@@ -1,0 +1,41 @@
+name: Android debug build
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Prepare SDK
+        shell: bash
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+      - name: Build and verify
+        shell: bash
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          go test ./...
+          bash scripts/build-android.sh
+          mkdir -p artifacts
+          cp apps/android/app/build/outputs/apk/debug/app-debug.apk artifacts/Network-EX-Android-debug.apk
+          (cd artifacts && sha256sum Network-EX-Android-debug.apk > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: network-ex-android-debug
+          path: artifacts/
+          if-no-files-found: error

@@ -1,0 +1,32 @@
+[Unit]
+Description=Network EX server (development)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=network-ex-server
+Group=network-ex-server
+UMask=0077
+EnvironmentFile=/etc/network-ex-server/server.env
+StateDirectory=network-ex-server
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/network-ex-server
+ExecStart=/usr/local/libexec/network-ex-server/start-server
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

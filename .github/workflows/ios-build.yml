@@ -11,7 +11,8 @@ concurrency:
   cancel-in-progress: true
 jobs:
   compile:
-    runs-on: macos-15
+    runs-on: macos-15-intel
+    # Xcode can cross-build the ARM64 device target on Intel; avoid the ARM queue.
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4

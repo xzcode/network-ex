@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xzcode/network-ex/internal/dataplane/path"
 	"github.com/xzcode/network-ex/internal/dataplane/relay"
 	"github.com/xzcode/network-ex/internal/dataplane/transport"
 	platform "github.com/xzcode/network-ex/internal/platform/tun"
@@ -31,20 +32,24 @@ type Config struct {
 	Peers           []Peer `json:"peers"`
 }
 type Peer struct {
-	IP             string `json:"ip"`
-	PublicKey      string `json:"public_key"`
-	Direct         string `json:"direct"`
-	RelayURL       string `json:"relay_url"`
-	RelayTokenFile string `json:"relay_token_file"`
-	RelayCA        string `json:"relay_ca"`
+	IP             string   `json:"ip"`
+	PublicKey      string   `json:"public_key"`
+	Direct         string   `json:"direct"`
+	RelayURL       string   `json:"relay_url"`
+	RelayTokenFile string   `json:"relay_token_file"`
+	RelayCA        string   `json:"relay_ca"`
+	ICE            bool     `json:"ice"`
+	STUNURL        string   `json:"stun_url"`
+	ICEInterfaces  []string `json:"ice_interfaces"`
 }
 type PeerStatus struct {
-	IP             string `json:"ip"`
-	Mode           string `json:"mode"`
-	HandshakeUnix  string `json:"handshake_unix"`
-	RxBytes        string `json:"rx_bytes"`
-	TxBytes        string `json:"tx_bytes"`
-	RelayConnected bool   `json:"relay_connected"`
+	IP             string         `json:"ip"`
+	Mode           string         `json:"mode"`
+	HandshakeUnix  string         `json:"handshake_unix"`
+	RxBytes        string         `json:"rx_bytes"`
+	TxBytes        string         `json:"tx_bytes"`
+	RelayConnected bool           `json:"relay_connected"`
+	ICE            *path.Snapshot `json:"ice,omitempty"`
 }
 type Status struct {
 	State     string       `json:"state"`
@@ -113,6 +118,9 @@ func prepare(c Config) (netip.Addr, []transport.Peer, []netip.Addr, string, erro
 			return bad(errors.New("select exactly one path"))
 		}
 		if p.Direct != "" {
+			if p.ICE || p.STUNURL != "" || len(p.ICEInterfaces) > 0 {
+				return bad(errors.New("ICE requires relay fallback, not a static direct endpoint"))
+			}
 			t.Direct, e = netip.ParseAddrPort(p.Direct)
 			if e != nil || t.Direct.Port() == 0 || !t.Direct.Addr().Is4() || t.Direct.Addr().IsUnspecified() || t.Direct.Addr().IsMulticast() {
 				return bad(errors.New("invalid direct endpoint"))
@@ -134,6 +142,12 @@ func prepare(c Config) (netip.Addr, []transport.Peer, []netip.Addr, string, erro
 				return bad(e)
 			}
 			t.Relay = &relay.Client{URL: p.RelayURL, Token: strings.TrimSpace(string(token)), CAFile: p.RelayCA, Key: ed25519.PrivateKey(k)}
+			if p.ICE {
+				t.ICE = &path.ICE{Relay: t.Relay, STUN: p.STUNURL, Interface: c.Interface, Excluded: used, Interfaces: p.ICEInterfaces}
+			} else if p.STUNURL != "" || len(p.ICEInterfaces) > 0 {
+				return bad(errors.New("stun_url and ice_interfaces require ice=true"))
+			}
+
 		}
 		peers = append(peers, t)
 		routes = append(routes, a)
@@ -156,7 +170,7 @@ func Check(c Config) error {
 }
 func Run(ctx context.Context, c Config) error {
 	if runtime.GOOS != "linux" {
-		return errors.New("M1 runtime is Linux only")
+		return errors.New("M2 runtime is Linux only")
 	}
 	ip, peers, routes, u, e := prepare(c)
 	if e != nil {
@@ -164,6 +178,9 @@ func Run(ctx context.Context, c Config) error {
 	}
 	b, e := transport.New(peers)
 	if e != nil {
+		return e
+	}
+	if e = platform.Preflight(c.Interface, ip, routes); e != nil {
 		return e
 	}
 	t, e := wgtun.CreateTUN(c.Interface, 1280)
@@ -218,6 +235,18 @@ func Run(ctx context.Context, c Config) error {
 			if peers[i].Relay != nil {
 				ps.Mode = "relay-configured"
 				ps.RelayConnected = peers[i].Relay.Ready()
+				if peers[i].ICE != nil {
+					snap := peers[i].ICE.Snapshot()
+					ps.ICE = &snap
+					if snap.Selected {
+						ps.Mode = "ice-selected"
+					} else if ps.RelayConnected {
+						ps.Mode = "relay-fallback"
+					} else {
+						ps.Mode = "unavailable"
+					}
+				}
+
 			}
 			s.Peers = append(s.Peers, ps)
 		}

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,9 +17,10 @@ import (
 	"time"
 
 	"github.com/xzcode/network-ex/internal/dataplane/relay"
+	stunserver "github.com/xzcode/network-ex/internal/node/stun"
 )
 
-const version = "0.1.0-dev-m1"
+const version = "0.2.0-dev-m2"
 
 func main() {
 	if e := run(os.Args[1:]); e != nil {
@@ -84,7 +86,8 @@ func run(args []string) error {
 		}
 	}
 	f := flag.NewFlagSet("server", flag.ContinueOnError)
-	mode := f.String("mode", "relay", "M1 supports relay only")
+	mode := f.String("mode", "relay", "M2 supports relay/signaling/STUN")
+	stunListen := f.String("stun-listen", "", "optional IPv4 UDP STUN listener")
 	listen := f.String("listen", "127.0.0.1:8443", "TLS listener")
 	node := f.String("node", "", "node ID")
 	issuer := f.String("issuer-public", "", "issuer public hex file")
@@ -94,7 +97,7 @@ func run(args []string) error {
 		return e
 	}
 	if *mode != "relay" {
-		return errors.New("M1 implements relay only; management/all planned M3")
+		return errors.New("M2 implements relay/signaling/STUN only; management/all planned M3")
 	}
 	if *node == "" || *issuer == "" || *cert == "" || *key == "" {
 		return errors.New("node, issuer-public, tls-cert and tls-key required")
@@ -103,9 +106,29 @@ func run(args []string) error {
 	if e != nil {
 		return e
 	}
-	srv := &http.Server{Addr: *listen, Handler: relay.NewServer(*node, p), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 * 1024, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
+	mux := http.NewServeMux()
+	mux.Handle("/signal/v1", relay.NewSignalServer(*node, p))
+	mux.Handle("/", relay.NewServer(*node, p))
+	srv := &http.Server{Addr: *listen, Handler: mux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 * 1024, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if *stunListen != "" {
+		addr, e := net.ResolveUDPAddr("udp4", *stunListen)
+		if e != nil {
+			return e
+		}
+		sock, e := net.ListenUDP("udp4", addr)
+		if e != nil {
+			return e
+		}
+		defer sock.Close()
+		go func() {
+			if e := stunserver.Serve(ctx, sock); e != nil {
+				fmt.Fprintln(os.Stderr, "STUN listener failed:", e)
+				stop()
+			}
+		}()
+	}
 	go func() {
 		<-ctx.Done()
 		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"sync"
 
+	"github.com/xzcode/network-ex/internal/dataplane/path"
 	"github.com/xzcode/network-ex/internal/dataplane/relay"
 	"golang.zx2c4.com/wireguard/conn"
 )
@@ -15,6 +16,7 @@ type Peer struct {
 	Logical netip.AddrPort
 	Direct  netip.AddrPort
 	Relay   *relay.Client
+	ICE     *path.ICE
 }
 type endpoint struct{ addr netip.AddrPort }
 
@@ -50,10 +52,18 @@ func New(peers []Peer) (*Bind, error) {
 	b := &Bind{peers: make(map[netip.AddrPort]Peer), byDirect: make(map[netip.AddrPort]netip.AddrPort)}
 	for _, p := range peers {
 		if !p.Logical.IsValid() || !p.Logical.Addr().Is4() || (p.Direct.IsValid() == (p.Relay != nil)) {
-			return nil, errors.New("exactly one direct/relay path per logical peer required")
+			return nil, errors.New("exactly one static direct/relay path per logical peer required")
 		}
 		if _, ok := b.peers[p.Logical]; ok {
 			return nil, errors.New("duplicate peer endpoint")
+		}
+		if p.ICE != nil {
+			if p.Relay == nil || p.ICE.Relay != p.Relay {
+				return nil, errors.New("ICE requires the same relay fallback")
+			}
+			if e := p.ICE.Validate(); e != nil {
+				return nil, e
+			}
 		}
 		b.peers[p.Logical] = p
 		if p.Direct.IsValid() {
@@ -82,6 +92,20 @@ func (b *Bind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
 	a := &active{sock: s, ctx: ctx, cancel: cancel, incoming: make(chan packet, 128)}
 	b.a = a
 	for _, p := range b.peers {
+		if p.ICE != nil {
+			p := p
+			a.wg.Add(1)
+			go func() {
+				defer a.wg.Done()
+				p.ICE.Run(ctx, func(data []byte) {
+					select {
+					case <-ctx.Done():
+					case a.incoming <- packet{data, p.Logical}:
+					default:
+					}
+				})
+			}()
+		}
 		if p.Relay != nil {
 			p := p
 			a.wg.Add(1)
@@ -183,6 +207,9 @@ func (b *Bind) Send(bufs [][]byte, ep conn.Endpoint) error {
 	}
 	for _, v := range bufs {
 		if p.Relay != nil {
+			if p.ICE != nil && p.ICE.Send(v) == nil {
+				continue
+			}
 			if err := p.Relay.Send(v); err != nil {
 				return err
 			}

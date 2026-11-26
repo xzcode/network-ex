@@ -2,10 +2,10 @@
 
 自主开发的跨平台虚拟局域网工具：端到端加密、P2P 直连优先、中继兜底、完全自托管。
 
-当前状态：M1 Linux 数据面开发版；静态 peer 的 WireGuard 直连及认证 TLS WSS 中继真实互通已通过隔离网络测试。未实现自动 NAT 穿透、动态切换、管理服务或桌面界面；不是生产版本。详见 [实现与验收](docs/M1_IMPLEMENTATION.md) 和 [阶段状态](docs/STATUS.md)。
+当前状态：M2 Linux 数据面开发版；真实隔离 NAT 环境已验证自动 ICE 穿透、P2P/WSS 中继混合组网及双向切换。管理服务、桌面界面、生产安全和公网验证未完成。详见 [M2 实现与验收](docs/M2_IMPLEMENTATION.md)、[M1 实现](docs/M1_IMPLEMENTATION.md)、[阶段状态](docs/STATUS.md)。
 
 ## 构建
-Go 1.23；Linux 运行时。见 M1 文档及 scripts/m1-netns.sh。
+Go 1.23；Linux 运行时。见 M2 文档及 scripts/m1-netns.sh、scripts/m2-nat.sh。
 ```sh
 go test ./...
 go build ./cmd/agent
@@ -22,4 +22,4 @@ go build ./cmd/server
 - [路线与验收](docs/ROADMAP.md) / [技术决策](docs/DECISIONS.md)
 - [开发协作](AGENTS.md)
 
-Windows、macOS、Linux 优先，Android/iOS 后续。单一服务端程序计划支持 all / management / relay 三种模式；目前仅 relay 已实现。桌面 UI 与后台 Agent 分离。所有功能以实测记录为准。
+Windows、macOS、Linux 优先，Android/iOS 后续。单一服务端程序计划支持 all / management / relay 三种模式；目前 relay 模式包含 WSS 中继、认证信令及可选 STUN。桌面 UI 与后台 Agent 分离。所有功能以实测记录为准。

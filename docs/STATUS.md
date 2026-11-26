@@ -1,7 +1,6 @@
 # 状态与交接（2026-11-26）
 
-M0 已提交。M1.1–M1.6 核心代码已落地：Go 工程、Linux TUN / 路由、WireGuard、静态每 peer UDP/WSS path、签名租约与设备证明、CLI/后台重连/状态/清理。
-实际 Go 1.23.12 编译成功，两个 relay 安全测试通过，三节点隔离 netns 同时直连/中继的 ICMP、TCP、UDP、底层抓包与路由清理实测通过；第二轮 1200-byte TCP/UDP、中继重启恢复、未经授权的 WG 密钥拒绝均通过。见 [M1 实现及验收证据](M1_IMPLEMENTATION.md)。
-M1 核心闭环通过；严格退出门尚未完全清零：完整 MTU 边界扫描、更多恶意 peer 场景、endpoint roaming、完整路由冲突、长时间重连尚未验证/补强。非生产版本，未部署公网、未发布 release、未验证 Windows/macOS。当前没有 NAT 自动打洞、自动切换和管理服务。
-下一批：补齐 M1 安全与传输边界；随后推进 M2.1–M2.6：STUN/ICE 同 socket 传输、信令、动态 path 状态机、回退、重探测、真实 NAT 验收。参见 ROADMAP、DECISIONS、M1_IMPLEMENTATION。
-决策：WSS 先行、QUIC 可选；静态原型不增加外置中间件。依赖/项目许可证待最终复核。
+M0 已完成。M1.1–M1.6 核心闭环实测完成，M2.1–M2.6 核心实现落地：内置 STUN、基于签名租约的 TLS 信令、Pion ICE 数据 socket、每 peer 独立直连选路、WSS fallback、失败后重协商与真实状态。
+M2 隔离 NAT 实验：A/B 位于独立 NAT 后，srflx/srflx 直连，C 的 UDP 封锁时仍走中继；TCP/UDP 同时互通；主动阻断 UDP 后约 5s 恢复中继、恢复 UDP 后约 21s 重新穿透（首次测试），清理通过。M1 静态路径回归通过，信令安全测试、路由冲突前置保护通过。详见 [M2 实现与验收](M2_IMPLEMENTATION.md)。
+严格生产退出门未清零：实际公网/CGNAT/对称 NAT、IPv6、OS 网络变更监听、长连接无感切换、完整 MTU 与长期负载、安全审计、跨平台尚未验收。没有公网部署、没有 Release。M2 开发版仅 Linux/IPv4。
+下一批 M3.1–M3.8：SQLite schema、管理员与账号、网络/IPAM、设备注册审批/撤销、信令快照、授权租约/续期与 ACL、内置管理 Web、all/management/relay 部署模式；兼容现有隔离网络验收。项目与依赖许可证仍待最终复核。

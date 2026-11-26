@@ -1,2 +1,2 @@
 # Data plane
-M1 WireGuard tunnel, static per-peer UDP/WSS transport and authenticated relay. Dynamic path management planned M2.
+WireGuard tunnel, static UDP/WSS transport, authenticated relay and ICE per-peer dynamic paths. M2 uses the nominated ICE Conn for actual encrypted packets. See docs/M2_IMPLEMENTATION.md.

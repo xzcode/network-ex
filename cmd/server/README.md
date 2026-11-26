@@ -1,2 +1,2 @@
 # Server
-M1 relay mode, issuer-keygen and lease CLI. Management/all planned for M3; not implemented. See [M1 implementation](../../docs/M1_IMPLEMENTATION.md).
+M2 relay mode: TLS WSS relay, scoped ICE signaling (/signal/v1), optional UDP STUN, issuer-keygen/lease. Management/all planned M3. See [M2 implementation](../../docs/M2_IMPLEMENTATION.md).

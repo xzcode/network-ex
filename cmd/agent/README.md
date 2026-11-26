@@ -1,2 +1,2 @@
 # Agent
-M1 Linux CLI: version, keygen, check, run, status. See [M1 implementation](../../docs/M1_IMPLEMENTATION.md).
+M2 Linux CLI: version, keygen, check, run, status. Static WireGuard or automatic ICE path with WSS fallback. See [M2 implementation](../../docs/M2_IMPLEMENTATION.md).

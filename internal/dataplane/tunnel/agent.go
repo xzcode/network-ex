@@ -88,8 +88,8 @@ func prepare(c Config) (netip.Addr, []transport.Peer, []netip.Addr, string, erro
 	if e != nil {
 		return bad(e)
 	}
-	if c.Interface == "" || len(c.Interface) > 15 || strings.ContainsAny(c.Interface, " /\t\n") || c.ListenPort == 0 || len(c.Peers) == 0 || len(c.Peers) > 64 {
-		return bad(errors.New("interface, fixed listen port, and 1–64 peers required"))
+	if c.Interface == "" || len(c.Interface) > 15 || strings.ContainsAny(c.Interface, " /\t\n") || c.ListenPort == 0 || len(c.Peers) > 64 {
+		return bad(errors.New("interface, fixed listen port, and 0–64 peers required"))
 	}
 	key, e := relay.ReadHex(c.WGKeyFile, 32, true)
 	if e != nil {
@@ -170,7 +170,7 @@ func Check(c Config) error {
 }
 func Run(ctx context.Context, c Config) error {
 	if runtime.GOOS != "linux" {
-		return errors.New("M2 runtime is Linux only")
+		return errors.New("M3 runtime is Linux only")
 	}
 	ip, peers, routes, u, e := prepare(c)
 	if e != nil {

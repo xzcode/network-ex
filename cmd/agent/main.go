@@ -10,14 +10,16 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
+	"github.com/xzcode/network-ex/internal/control/managed"
 	"github.com/xzcode/network-ex/internal/dataplane/relay"
 	"github.com/xzcode/network-ex/internal/dataplane/tunnel"
 	"golang.org/x/crypto/curve25519"
 )
 
-const version = "0.2.0-dev-m2"
+const version = "0.3.0-dev-m3"
 
 func main() {
 	if e := run(os.Args[1:]); e != nil {
@@ -27,7 +29,7 @@ func main() {
 }
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: agent version | keygen | check | run | status")
+		return errors.New("usage: agent version | keygen | check | run | status | managed-enroll | managed-run")
 	}
 	switch args[0] {
 	case "version":
@@ -73,6 +75,46 @@ func run(args []string) error {
 		}
 		fmt.Printf("%x\n", pub)
 		return nil
+	case "managed-enroll":
+		f := flag.NewFlagSet("managed-enroll", flag.ContinueOnError)
+		server := f.String("server", "", "management HTTPS origin")
+		ca := f.String("ca", "", "optional CA PEM")
+		invite := f.String("invite-file", "", "0600 invite file")
+		name := f.String("name", "", "device name")
+		dir := f.String("state-dir", "", "new 0700 state directory")
+		if e := f.Parse(args[1:]); e != nil {
+			return e
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		d, e := managed.Enroll(ctx, *server, *ca, *invite, *name, *dir)
+		if e != nil {
+			return e
+		}
+		fmt.Printf("device %s enrolled, awaiting approval\n", d.ID)
+		return nil
+	case "managed-run":
+		f := flag.NewFlagSet("managed-run", flag.ContinueOnError)
+		dir := f.String("state-dir", "", "enrolled state directory")
+		iface := f.String("interface", "nex0", "TUN interface name")
+		port := f.Uint("listen-port", 51820, "UDP port")
+		iceIf := f.String("ice-interfaces", "", "comma-separated interface allowlist")
+		relayCA := f.String("relay-ca", "", "optional separate relay CA")
+		if e := f.Parse(args[1:]); e != nil {
+			return e
+		}
+		if *dir == "" || *port == 0 || *port > 65535 {
+			return errors.New("state-dir and valid listen-port required")
+		}
+		var ifaces []string
+		for _, v := range strings.Split(*iceIf, ",") {
+			if v = strings.TrimSpace(v); v != "" {
+				ifaces = append(ifaces, v)
+			}
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return managed.Run(ctx, managed.Options{Dir: *dir, Interface: *iface, Port: uint16(*port), ICEInterfaces: ifaces, RelayCA: *relayCA})
 	case "status":
 		f := flag.NewFlagSet("status", flag.ContinueOnError)
 		p := f.String("file", "", "status file")

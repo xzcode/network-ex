@@ -1,6 +1,7 @@
 # 状态与交接（2026-11-26）
 
-M0 已完成。M1.1–M1.6 核心闭环实测完成，M2.1–M2.6 核心实现落地：内置 STUN、基于签名租约的 TLS 信令、Pion ICE 数据 socket、每 peer 独立直连选路、WSS fallback、失败后重协商与真实状态。
-M2 隔离 NAT 实验：A/B 位于独立 NAT 后，srflx/srflx 直连，C 的 UDP 封锁时仍走中继；TCP/UDP 同时互通；主动阻断 UDP 后约 5s 恢复中继、恢复 UDP 后约 21s 重新穿透（首次测试），清理通过。M1 静态路径回归通过，信令安全测试、路由冲突前置保护通过。详见 [M2 实现与验收](M2_IMPLEMENTATION.md)。
-严格生产退出门未清零：实际公网/CGNAT/对称 NAT、IPv6、OS 网络变更监听、长连接无感切换、完整 MTU 与长期负载、安全审计、跨平台尚未验收。没有公网部署、没有 Release。M2 开发版仅 Linux/IPv4。
-下一批 M3.1–M3.8：SQLite schema、管理员与账号、网络/IPAM、设备注册审批/撤销、信令快照、授权租约/续期与 ACL、内置管理 Web、all/management/relay 部署模式；兼容现有隔离网络验收。项目与依赖许可证仍待最终复核。
+M0 完成。M1/M2 Linux IPv4 数据面核心完成：WireGuard、STUN、ICE/WSS 中继、隔离 NAT 实测与回退。详见 M1/M2_IMPLEMENTATION。
+M3.1–M3.8 管理服务核心已实现：SQLite、管理员/成员、网络/IPAM、一次性邀请、设备审批/撤销、设备签名快照/防重放、双向设备对 ACL、租约自动续期、内置 Web、all/management/relay。
+版本 0.3.0-dev-m3。Go tests、all 与 split 三设备隔离网络完整脚本均通过（实际 TCP/UDP、P2P+relay、审批/ACL/撤销、管理停机约18s fail closed、SQLite重启持久化/恢复）。详见 M3_IMPLEMENTATION.md。
+未完成的生产验收：管理 Agent 变更配置/租约时重建 tunnel；独立 relay 仍按签名 lease 到期撤销，无分布式即时撤销；多网络/端口 ACL/真实公网、IPv6、长期性能、安全评审、跨平台及浏览器交互尚未验收。无公网部署、无 release。
+下一阶段 M4：提取共享 protocol 以消除 Agent SQLite/CGO 耦合，安全 IPC、后台服务生命周期、Tauri/Vue 桌面 UI 与主题/i18n、Windows/macOS/Linux 虚拟网卡与路由适配、各平台真实安装验收；再 M5 多中继扩展。项目许可证及依赖安全需复核。

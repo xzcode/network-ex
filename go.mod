@@ -4,6 +4,7 @@ go 1.23.0
 
 require (
 	github.com/gorilla/websocket v1.5.3
+	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/pion/ice/v2 v2.3.38
 	github.com/pion/stun v0.6.1
 	golang.org/x/crypto v0.18.0

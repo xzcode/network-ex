@@ -16,11 +16,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/xzcode/network-ex/internal/control"
 	"github.com/xzcode/network-ex/internal/dataplane/relay"
 	stunserver "github.com/xzcode/network-ex/internal/node/stun"
 )
 
-const version = "0.2.0-dev-m2"
+const version = "0.3.0-dev-m3"
 
 func main() {
 	if e := run(os.Args[1:]); e != nil {
@@ -33,6 +34,28 @@ func run(args []string) error {
 		switch args[0] {
 		case "version":
 			fmt.Println(version)
+			return nil
+		case "admin-bootstrap":
+			f := flag.NewFlagSet("admin-bootstrap", flag.ContinueOnError)
+			db := f.String("db", "", "SQLite path")
+			username := f.String("username", "", "administrator login")
+			password := f.String("password-file", "", "0600 password file")
+			if e := f.Parse(args[1:]); e != nil {
+				return e
+			}
+			pw, e := control.PasswordFile(*password)
+			if e != nil {
+				return e
+			}
+			store, e := control.Open(*db)
+			if e != nil {
+				return e
+			}
+			defer store.Close()
+			if e = store.Bootstrap(*username, pw); e != nil {
+				return e
+			}
+			fmt.Println("administrator initialized")
 			return nil
 		case "issuer-keygen":
 			f := flag.NewFlagSet("issuer-keygen", flag.ContinueOnError)
@@ -86,7 +109,11 @@ func run(args []string) error {
 		}
 	}
 	f := flag.NewFlagSet("server", flag.ContinueOnError)
-	mode := f.String("mode", "relay", "M2 supports relay/signaling/STUN")
+	mode := f.String("mode", "relay", "all, management or relay")
+	db := f.String("db", "", "SQLite database path for management/all")
+	signingKey := f.String("issuer-key", "", "issuer private key file for management/all")
+	relayURL := f.String("relay-url", "", "advertised wss relay URL")
+	stunURL := f.String("stun-url", "", "advertised STUN URL")
 	stunListen := f.String("stun-listen", "", "optional IPv4 UDP STUN listener")
 	listen := f.String("listen", "127.0.0.1:8443", "TLS listener")
 	node := f.String("node", "", "node ID")
@@ -96,19 +123,54 @@ func run(args []string) error {
 	if e := f.Parse(args); e != nil {
 		return e
 	}
-	if *mode != "relay" {
-		return errors.New("M2 implements relay/signaling/STUN only; management/all planned M3")
+	if *mode != "all" && *mode != "management" && *mode != "relay" {
+		return errors.New("mode must be all, management or relay")
 	}
-	if *node == "" || *issuer == "" || *cert == "" || *key == "" {
-		return errors.New("node, issuer-public, tls-cert and tls-key required")
+	if *node == "" || *cert == "" || *key == "" {
+		return errors.New("node, tls-cert and tls-key required")
 	}
-	p, e := relay.ReadHex(*issuer, ed25519.PublicKeySize, false)
-	if e != nil {
-		return e
+	if *mode == "management" && *stunListen != "" {
+		return errors.New("management-only mode cannot listen for STUN")
 	}
+	var pub ed25519.PublicKey
+	var management *control.Service
 	mux := http.NewServeMux()
-	mux.Handle("/signal/v1", relay.NewSignalServer(*node, p))
-	mux.Handle("/", relay.NewServer(*node, p))
+	if *mode != "relay" {
+		k, e := relay.ReadHex(*signingKey, ed25519.PrivateKeySize, true)
+		if e != nil {
+			return e
+		}
+		priv := ed25519.PrivateKey(k)
+		pub = priv.Public().(ed25519.PublicKey)
+		store, e := control.Open(*db)
+		if e != nil {
+			return e
+		}
+		defer store.Close()
+		management, e = control.NewService(store, priv, *node, *relayURL, *stunURL)
+		if e != nil {
+			return e
+		}
+		mux.Handle("/", management.Handler())
+	} else {
+		p, e := relay.ReadHex(*issuer, ed25519.PublicKeySize, false)
+		if e != nil {
+			return e
+		}
+		pub = p
+	}
+	if *mode != "management" {
+		rs, ss := relay.NewServer(*node, pub), relay.NewSignalServer(*node, pub)
+		if management != nil {
+			rs.Authorize = management.AuthorizeLease
+			ss.Authorize = management.AuthorizeLease
+		}
+		mux.Handle("/relay/v1", rs)
+		mux.Handle("/signal/v1", ss)
+		if *mode == "relay" {
+			mux.Handle("/", rs)
+		}
+	}
 	srv := &http.Server{Addr: *listen, Handler: mux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 * 1024, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -135,7 +197,7 @@ func run(args []string) error {
 		defer cancel()
 		srv.Shutdown(c)
 	}()
-	e = srv.ListenAndServeTLS(*cert, *key)
+	e := srv.ListenAndServeTLS(*cert, *key)
 	if errors.Is(e, http.ErrServerClosed) {
 		return nil
 	}

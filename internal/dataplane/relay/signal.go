@@ -53,11 +53,12 @@ type signalPeer struct {
 func (p *signalPeer) close() { p.once.Do(func() { close(p.done); p.ws.Close() }) }
 
 type SignalServer struct {
-	node   string
-	issuer ed25519.PublicKey
-	mu     sync.Mutex
-	flows  map[Lease]map[string]*signalPeer
-	slots  chan struct{}
+	Authorize func(Lease) bool
+	node      string
+	issuer    ed25519.PublicKey
+	mu        sync.Mutex
+	flows     map[Lease]map[string]*signalPeer
+	slots     chan struct{}
 }
 
 func NewSignalServer(node string, issuer ed25519.PublicKey) *SignalServer {
@@ -131,7 +132,7 @@ func (s *SignalServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	l, e := Verify(s.issuer, h.Token, time.Now())
-	if e != nil || l.Node != s.node || (h.ID != l.A && h.ID != l.B) {
+	if e != nil || l.Node != s.node || (h.ID != l.A && h.ID != l.B) || (s.Authorize != nil && !s.Authorize(l)) {
 		return
 	}
 	pub, e := hex.DecodeString(h.ID)
@@ -159,6 +160,24 @@ func (s *SignalServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c.SetReadDeadline(deadline)
 	timer := time.AfterFunc(time.Until(deadline), p.close)
 	defer timer.Stop()
+	if s.Authorize != nil {
+		go func() {
+			tick := time.NewTicker(time.Second)
+			defer tick.Stop()
+			for {
+				select {
+				case <-p.done:
+					return
+				case <-tick.C:
+					if !s.Authorize(l) {
+						p.close()
+						return
+					}
+				}
+			}
+		}()
+	}
+
 	// Further application messages are forbidden for this generation.
 	go func() { defer p.close(); c.ReadMessage() }()
 	select {

@@ -1,2 +1,2 @@
 # Scripts
-m1-netns.sh: real Linux WireGuard static direct + WSS relay regression. m2-nat.sh: independent NAT gateways, STUN, ICE direct and UDP-blocked relay, automatic fallback/recovery. m2-route-conflict.sh: route conflict preflight. All network changes isolated to netns. See docs/M1_IMPLEMENTATION.md and docs/M2_IMPLEMENTATION.md.
+m1-netns.sh: static WireGuard direct/relay; m2-nat.sh: independent NAT and dynamic paths; m2-route-conflict.sh: conflict protection; m3-managed.sh: managed auto-enrollment, IPAM, ACL, outage/recovery (all or split). Isolated Linux namespaces only. See docs/M3_IMPLEMENTATION.md.

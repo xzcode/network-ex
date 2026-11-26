@@ -31,11 +31,12 @@ type registration struct {
 func (r *registration) close() { r.once.Do(func() { close(r.done); r.ws.Close() }) }
 
 type Server struct {
-	Node   string
-	Issuer ed25519.PublicKey
-	mu     sync.Mutex
-	flows  map[Lease]map[string]*registration
-	slots  chan struct{}
+	Authorize func(Lease) bool
+	Node      string
+	Issuer    ed25519.PublicKey
+	mu        sync.Mutex
+	flows     map[Lease]map[string]*registration
+	slots     chan struct{}
 }
 
 func NewServer(node string, issuer ed25519.PublicKey) *Server {
@@ -80,7 +81,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	l, e := Verify(s.Issuer, h.Token, time.Now())
-	if e != nil || l.Node != s.Node || (h.ID != l.A && h.ID != l.B) {
+	if e != nil || l.Node != s.Node || (h.ID != l.A && h.ID != l.B) || (s.Authorize != nil && !s.Authorize(l)) {
 		return
 	}
 	pub, e := hex.DecodeString(h.ID)
@@ -104,6 +105,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c.SetReadDeadline(deadline)
 	timer := time.AfterFunc(time.Until(deadline), reg.close)
 	defer timer.Stop()
+	if s.Authorize != nil {
+		go func() {
+			tick := time.NewTicker(time.Second)
+			defer tick.Stop()
+			for {
+				select {
+				case <-reg.done:
+					return
+				case <-tick.C:
+					if !s.Authorize(l) {
+						reg.close()
+						return
+					}
+				}
+			}
+		}()
+	}
+
 	go func() {
 		defer reg.close()
 		for {

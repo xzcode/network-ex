@@ -1,2 +1,2 @@
 # Server
-M2 relay mode: TLS WSS relay, scoped ICE signaling (/signal/v1), optional UDP STUN, issuer-keygen/lease. Management/all planned M3. See [M2 implementation](../../docs/M2_IMPLEMENTATION.md).
+M3: all / management / relay; SQLite, embedded Web, admin-bootstrap, TLS WSS signaling/relay and optional STUN. See [M3 implementation](../../docs/M3_IMPLEMENTATION.md).

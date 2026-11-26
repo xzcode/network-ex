@@ -2,10 +2,10 @@
 
 自主开发的跨平台虚拟局域网工具：端到端加密、P2P 直连优先、中继兜底、完全自托管。
 
-当前状态：M2 Linux 数据面开发版；真实隔离 NAT 环境已验证自动 ICE 穿透、P2P/WSS 中继混合组网及双向切换。管理服务、桌面界面、生产安全和公网验证未完成。详见 [M2 实现与验收](docs/M2_IMPLEMENTATION.md)、[M1 实现](docs/M1_IMPLEMENTATION.md)、[阶段状态](docs/STATUS.md)。
+当前状态：M3 Linux 开发版。WireGuard/ICE/WSS 混合组网与 SQLite 管理服务已实现，三设备自动注册、审批、ACL、撤销、重启恢复已通过单机及拆分模式隔离网络验收；桌面客户端、跨平台和生产验收未完成。详见 [M3 实现与验收](docs/M3_IMPLEMENTATION.md)、[阶段状态](docs/STATUS.md)。
 
 ## 构建
-Go 1.23；Linux 运行时。见 M2 文档及 scripts/m1-netns.sh、scripts/m2-nat.sh。
+Go 1.23、CGO 和 C 编译器；Linux 运行时。详见 M3 文档和 scripts/m3-managed.sh。
 ```sh
 go test ./...
 go build ./cmd/agent
@@ -22,4 +22,4 @@ go build ./cmd/server
 - [路线与验收](docs/ROADMAP.md) / [技术决策](docs/DECISIONS.md)
 - [开发协作](AGENTS.md)
 
-Windows、macOS、Linux 优先，Android/iOS 后续。单一服务端程序计划支持 all / management / relay 三种模式；目前 relay 模式包含 WSS 中继、认证信令及可选 STUN。桌面 UI 与后台 Agent 分离。所有功能以实测记录为准。
+Windows、macOS、Linux 优先，Android/iOS 后续。单一服务端程序支持 all / management / relay 三种模式，单机内置 SQLite 与 Web 管理。桌面 UI 与后台 Agent 分离。所有功能以实测记录为准。

@@ -12,8 +12,10 @@ import (
 )
 
 type Peer struct {
-	Prefixes []netip.Prefix
-	Policy   *protocol.TrafficPolicy
+	ExitTargets []netip.Prefix
+	ExitServed  []netip.Prefix
+	Prefixes    []netip.Prefix
+	Policy      *protocol.TrafficPolicy
 }
 type flow struct {
 	src, dst netip.Addr
@@ -41,6 +43,29 @@ func New(local []netip.Prefix, peers []Peer) (*Guard, error) {
 		return nil, errors.New("empty local address scope")
 	}
 	all := append([]netip.Prefix(nil), local...)
+	served := map[netip.Prefix]bool{}
+	hasTargets := false
+	for _, p := range peers {
+		if len(p.ExitTargets) > 0 {
+			hasTargets = true
+		}
+		for _, v := range p.ExitServed {
+			if served[v] {
+				continue
+			}
+			for _, q := range all {
+				if v.Overlaps(q) {
+					return nil, errors.New("exit served scope overlaps local scope")
+				}
+			}
+			served[v] = true
+			all = append(all, v)
+		}
+	}
+	if hasTargets && len(served) > 0 {
+		return nil, errors.New("exit chaining is not supported")
+	}
+
 	for _, p := range peers {
 		if len(p.Prefixes) == 0 || p.Policy.Validate() != nil {
 			return nil, errors.New("invalid peer scope or policy")
@@ -140,9 +165,7 @@ func (g *Guard) Allow(b []byte, inbound bool) bool {
 	if inbound {
 		local, remote = p.dst, p.src
 	}
-	if !contains(g.local, local) {
-		return false
-	}
+
 	var selected *Peer
 	for i := range g.peers {
 		if contains(g.peers[i].Prefixes, remote) {
@@ -153,7 +176,13 @@ func (g *Guard) Allow(b []byte, inbound bool) bool {
 	if selected == nil {
 		return false
 	}
-	if selected.Policy == nil {
+	exitLocal := contains(selected.ExitServed, local)
+	exitRemote := contains(selected.ExitTargets, remote)
+	if !contains(g.local, local) && !exitLocal {
+		return false
+	}
+	exit := exitLocal || exitRemote
+	if selected.Policy == nil && !exit {
 		return true
 	}
 	// State is per normalized flow and shared by ingress and egress. Unknown
@@ -205,7 +234,16 @@ func (g *Guard) Allow(b []byte, inbound bool) bool {
 		}
 		return true
 	}
-	if !allowedService(selected.Policy, p) || len(g.flows) >= 8192 {
+	if exit && !((exitRemote && !inbound) || (exitLocal && inbound)) {
+		return false
+	}
+	allowed := false
+	if selected.Policy != nil {
+		allowed = allowedService(selected.Policy, p)
+	} else {
+		allowed = p.proto == 17 || (p.proto == 6 && p.syn && !p.ack && !p.fin && !p.rst) || (p.proto == 1 && p.icmpType == 8)
+	}
+	if !allowed || len(g.flows) >= 8192 {
 		return false
 	}
 	ttl := 2 * time.Minute

@@ -96,6 +96,8 @@ func (s *Service) Handler() http.Handler {
 	route("GET /api/v1/networks/{id}/advanced", s.advanced)
 	route("PUT /api/v1/networks/{id}/devices/{device}/advanced", s.setAdvancedDevice)
 	route("PUT /api/v1/networks/{id}/traffic", s.setTraffic)
+	route("GET /api/v1/networks/{id}/exit", s.listExit)
+	route("PUT /api/v1/networks/{id}/exit", s.setExit)
 
 	route("GET /api/v1/relay/nodes", s.listNodes)
 	route("POST /api/v1/relay/nodes", s.createNode)
@@ -549,6 +551,9 @@ func (s *Service) changeDevice(w http.ResponseWriter, r *http.Request, approve b
 				return nil
 			}
 			d.Status = "revoked"
+			if _, e = tx.Exec("DELETE FROM exit_grants WHERE client_id=? OR gateway_id=?", id, id); e != nil {
+				return e
+			}
 			if _, e = tx.Exec("DELETE FROM subnet_routes WHERE device_id=?", id); e != nil {
 				return e
 			}
@@ -758,6 +763,13 @@ func (s *Service) snapshot(w http.ResponseWriter, r *http.Request) error {
 		if e != nil {
 			return e
 		}
+		grants, e := exitFor(tx, d.NetworkID)
+		if e != nil {
+			return e
+		}
+		if len(grants) > 0 && !v.ExitRoutes {
+			return failure(426, "exit policies require M6.1 Agent")
+		}
 		if !v.Advanced && (len(advanced) > 0 || len(traffic) > 0) {
 			return failure(426, "advanced network policy requires M6 agent")
 		}
@@ -827,6 +839,12 @@ func (s *Service) snapshot(w http.ResponseWriter, r *http.Request) error {
 			}
 			if selected.ID == "" {
 				continue
+			}
+			if g, ok := grants[d.ID]; ok && g.Gateway == c.peer.ID {
+				c.peer.ExitTargets = g.Targets
+			}
+			if g, ok := grants[c.peer.ID]; ok && g.Gateway == d.ID {
+				c.peer.ExitServed = g.Targets
 			}
 			c.peer.Subnets = advanced[c.peer.ID].Subnets
 			c.peer.DNSLabel = advanced[c.peer.ID].DNSLabel

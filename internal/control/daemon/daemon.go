@@ -25,6 +25,7 @@ const MaxResponse = 256 * 1024
 
 type Request struct {
 	Action  string `json:"action"`
+	Slot    int    `json:"slot,omitempty"`
 	Server  string `json:"server,omitempty"`
 	Name    string `json:"name,omitempty"`
 	Invite  string `json:"invite,omitempty"`
@@ -42,18 +43,34 @@ type Status struct {
 	Tunnel        *tunnel.Status       `json:"tunnel,omitempty"`
 	Error         string               `json:"error,omitempty"`
 }
+type ProfileSummary struct {
+	Slot    int    `json:"slot"`
+	Exists  bool   `json:"exists"`
+	Name    string `json:"name,omitempty"`
+	IP      string `json:"ip,omitempty"`
+	Server  string `json:"server,omitempty"`
+	Running bool   `json:"running"`
+	Desired bool   `json:"desired"`
+	State   string `json:"state,omitempty"`
+}
 type Response struct {
-	OK     bool    `json:"ok"`
-	Error  string  `json:"error,omitempty"`
-	Status *Status `json:"status,omitempty"`
+	Profiles []ProfileSummary `json:"profiles,omitempty"`
+	OK       bool             `json:"ok"`
+	Error    string           `json:"error,omitempty"`
+	Status   *Status          `json:"status,omitempty"`
 }
 type Options struct {
-	DNSListen               string
-	AllowSubnets            []string
-	Root, Socket, Interface string
-	SocketGID               int
-	Port                    uint16
-	ICEInterfaces           []string
+	ExitVia                       string
+	ExitTargets, AllowExitTargets []string
+	Profiles                      int
+	DNSHub                        *managed.DNSHub
+	DNSProfile                    string
+	DNSListen                     string
+	AllowSubnets                  []string
+	Root, Socket, Interface       string
+	SocketGID                     int
+	Port                          uint16
+	ICEInterfaces                 []string
 }
 type prefs struct {
 	Desired bool `json:"desired"`
@@ -155,7 +172,7 @@ func (d *Daemon) start() error {
 	done := d.done
 	d.lastErr = ""
 	go func() {
-		done <- managed.Run(ctx, managed.Options{DNSListen: d.opt.DNSListen, AllowSubnets: d.opt.AllowSubnets, Dir: d.profile(), Interface: d.opt.Interface, Port: d.opt.Port, ICEInterfaces: d.opt.ICEInterfaces})
+		done <- managed.Run(ctx, managed.Options{ExitVia: d.opt.ExitVia, ExitTargets: d.opt.ExitTargets, AllowExitTargets: d.opt.AllowExitTargets, DNSListen: d.opt.DNSListen, DNSHub: d.opt.DNSHub, DNSProfile: d.opt.DNSProfile, AllowSubnets: d.opt.AllowSubnets, Dir: d.profile(), Interface: d.opt.Interface, Port: d.opt.Port, ICEInterfaces: d.opt.ICEInterfaces})
 	}()
 	return nil
 }
@@ -184,7 +201,7 @@ func (d *Daemon) stopRun(persist bool) error {
 }
 func (d *Daemon) status() Status {
 	d.reap()
-	s := Status{Platform: runtime.GOOS, Version: "0.6.0-dev-m6", Running: d.done != nil, Desired: d.desired, Error: d.lastErr}
+	s := Status{Platform: runtime.GOOS, Version: "0.6.1-dev-m6", Running: d.done != nil, Desired: d.desired, Error: d.lastErr}
 	if _, e := os.Lstat(d.profile()); e == nil {
 		s.ProfileExists = true
 	}
@@ -323,23 +340,16 @@ func Serve(ctx context.Context, opt Options) error {
 		return e
 	}
 	defer l.Close()
-	d := &Daemon{ctx: ctx, opt: opt}
-	var p prefs
-	if e = readPrivateJSON(filepath.Join(root, "settings.json"), &p, 8192); e == nil {
-		d.desired = p.Desired
-	} else if !os.IsNotExist(e) {
+	sup, e := newSupervisor(ctx, opt)
+	if e != nil {
 		return e
 	}
-	if d.desired {
-		if e = d.start(); e != nil {
-			d.lastErr = e.Error()
-		}
-	}
+	defer sup.shutdown()
 	closeListener := context.AfterFunc(ctx, func() { l.Close() })
 	defer closeListener()
 	var wg sync.WaitGroup
 	slots := make(chan struct{}, 16)
-	defer func() { wg.Wait(); d.mu.Lock(); defer d.mu.Unlock(); _ = d.stopRun(false) }()
+	defer wg.Wait()
 	for {
 		c, e := l.Accept()
 		if e != nil {
@@ -372,7 +382,7 @@ func Serve(ctx context.Context, opt Options) error {
 			if ctx.Err() != nil {
 				return
 			}
-			_ = json.NewEncoder(c).Encode(d.handle(r))
+			_ = json.NewEncoder(c).Encode(sup.handle(r))
 		}()
 	}
 }

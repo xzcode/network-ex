@@ -24,7 +24,7 @@ import (
 	"golang.org/x/crypto/curve25519"
 )
 
-const version = "0.6.0-dev-m6"
+const version = "0.6.1-dev-m6"
 
 func main() {
 	if e := run(os.Args[1:]); e != nil {
@@ -83,6 +83,10 @@ func run(args []string) error {
 	case "daemon":
 		f := flag.NewFlagSet("daemon", flag.ContinueOnError)
 		root := f.String("state-root", daemon.DefaultRoot(), "prepared private service root")
+		profiles := f.Int("profiles", 8, "maximum local network profiles (1-8)")
+		exitVia := f.String("exit-via", "", "default profile approved exit gateway device ID")
+		exitTargets := f.String("exit-targets", "", "default profile selected public IPv4 targets")
+		allowExit := f.String("allow-exit-targets", "", "default profile gateway target opt-in")
 		sock := f.String("socket", ipc.DefaultAddress(), "local IPC address")
 		gid := f.Int("socket-gid", -1, "Unix socket group id; default process group")
 		iface := f.String("interface", daemon.DefaultInterface(), "overlay interface")
@@ -105,7 +109,7 @@ func run(args []string) error {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		return service.Run(ctx, func(c context.Context) error {
-			return daemon.Serve(c, daemon.Options{DNSListen: *dnsListen, AllowSubnets: splitList(*allowSubnets), Root: *root, Socket: *sock, SocketGID: *gid, Interface: *iface, Port: uint16(*port), ICEInterfaces: ifaces})
+			return daemon.Serve(c, daemon.Options{ExitVia: *exitVia, ExitTargets: splitList(*exitTargets), AllowExitTargets: splitList(*allowExit), Profiles: *profiles, DNSListen: *dnsListen, AllowSubnets: splitList(*allowSubnets), Root: *root, Socket: *sock, SocketGID: *gid, Interface: *iface, Port: uint16(*port), ICEInterfaces: ifaces})
 		})
 	case "ctl":
 		f := flag.NewFlagSet("ctl", flag.ContinueOnError)
@@ -149,6 +153,9 @@ func run(args []string) error {
 		port := f.Uint("listen-port", 51820, "UDP port")
 		iceIf := f.String("ice-interfaces", "", "comma-separated interface allowlist")
 		relayCA := f.String("relay-ca", "", "optional separate relay CA")
+		exitVia := f.String("exit-via", "", "approved exit gateway device ID")
+		exitTargets := f.String("exit-targets", "", "comma-separated selected public IPv4 targets")
+		allowExit := f.String("allow-exit-targets", "", "comma-separated public IPv4 targets this gateway may forward")
 		allowSubnets := f.String("allow-subnets", "", "comma-separated approved private CIDRs, local gateway opt-in")
 		dnsListen := f.String("dns-listen", "", "optional loopback DNS listener (e.g. 127.0.0.1:15353)")
 		if e := f.Parse(args[1:]); e != nil {
@@ -165,7 +172,7 @@ func run(args []string) error {
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		return managed.Run(ctx, managed.Options{DNSListen: *dnsListen, AllowSubnets: splitList(*allowSubnets), Dir: *dir, Interface: *iface, Port: uint16(*port), ICEInterfaces: ifaces, RelayCA: *relayCA})
+		return managed.Run(ctx, managed.Options{ExitVia: *exitVia, ExitTargets: splitList(*exitTargets), AllowExitTargets: splitList(*allowExit), DNSListen: *dnsListen, AllowSubnets: splitList(*allowSubnets), Dir: *dir, Interface: *iface, Port: uint16(*port), ICEInterfaces: ifaces, RelayCA: *relayCA})
 	case "status":
 		f := flag.NewFlagSet("status", flag.ContinueOnError)
 		p := f.String("file", "", "status file")

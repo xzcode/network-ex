@@ -6,6 +6,7 @@ use tauri::{Manager,menu::{Menu,MenuItem},tray::TrayIconBuilder,WindowEvent};
 #[serde(deny_unknown_fields)]
 struct Request {
  action:String,
+ #[serde(skip_serializing_if="Option::is_none")] slot:Option<u8>,
  #[serde(skip_serializing_if="Option::is_none")] server:Option<String>,
  #[serde(skip_serializing_if="Option::is_none")] name:Option<String>,
  #[serde(skip_serializing_if="Option::is_none")] invite:Option<String>,
@@ -20,7 +21,7 @@ fn agent_path()->Result<std::path::PathBuf,String>{
 }
 #[tauri::command]
 async fn agent_request(request:Request)->Result<serde_json::Value,String>{
- if !matches!(request.action.as_str(),"status"|"diagnostics"|"enroll"|"connect"|"disconnect"|"forget"){return Err("invalid Agent action".into())}
+ if !matches!(request.action.as_str(),"list"|"status"|"diagnostics"|"enroll"|"connect"|"disconnect"|"forget"){return Err("invalid Agent action".into())}
  let payload=serde_json::to_vec(&request).map_err(|_|"invalid request")?;
  if payload.len()>65536{return Err("request too large".into())}
  tauri::async_runtime::spawn_blocking(move||{

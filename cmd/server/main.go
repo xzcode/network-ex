@@ -25,7 +25,7 @@ import (
 	stunserver "github.com/xzcode/network-ex/internal/node/stun"
 )
 
-const version = "0.6.0-dev-m6"
+const version = "0.6.1-dev-m6"
 
 func main() {
 	if e := run(os.Args[1:]); e != nil {

@@ -23,6 +23,7 @@ import (
 
 	"github.com/xzcode/network-ex/internal/dataplane/relay"
 	"github.com/xzcode/network-ex/internal/dataplane/tunnel"
+	"github.com/xzcode/network-ex/internal/platform/exitguard"
 	"github.com/xzcode/network-ex/internal/platform/localfile"
 	control "github.com/xzcode/network-ex/pkg/protocol"
 	"golang.org/x/crypto/curve25519"
@@ -211,7 +212,7 @@ func Load(dir string) (State, error) {
 }
 func (c *Client) Snapshot(ctx context.Context, s State, key ed25519.PrivateKey, probes ...control.NodeProbe) (control.Snapshot, error) {
 	var snap control.Snapshot
-	req := control.DeviceRequest{ID: s.ID, MultiRelay: true, Advanced: true, Probes: probes}
+	req := control.DeviceRequest{ID: s.ID, MultiRelay: true, Advanced: true, ExitRoutes: true, Probes: probes}
 	if e := req.Sign(key); e != nil {
 		return snap, e
 	}
@@ -270,11 +271,15 @@ func (c *Client) Probe(ctx context.Context, nodes []control.RelayNode) []control
 }
 
 type Options struct {
-	DNSListen               string
-	AllowSubnets            []string
-	Dir, Interface, RelayCA string
-	Port                    uint16
-	ICEInterfaces           []string
+	ExitVia                       string
+	ExitTargets, AllowExitTargets []string
+	DNSHub                        *DNSHub
+	DNSProfile                    string
+	DNSListen                     string
+	AllowSubnets                  []string
+	Dir, Interface, RelayCA       string
+	Port                          uint16
+	ICEInterfaces                 []string
 }
 type PeerInfo struct {
 	Subnets   []string `json:"subnets,omitempty"`
@@ -297,8 +302,17 @@ type LocalStatus struct {
 	Error      string         `json:"error,omitempty"`
 }
 
-func Run(ctx context.Context, o Options) error {
+func Run(ctx context.Context, o Options) (runErr error) {
 	var e error
+	if _, e = control.ValidateExitTargets(o.ExitTargets); e != nil {
+		return e
+	}
+	if _, e = control.ValidateExitTargets(o.AllowExitTargets); e != nil {
+		return e
+	}
+	if (o.ExitVia == "") != (len(o.ExitTargets) == 0) || len(o.ExitTargets) > 0 && len(o.AllowExitTargets) > 0 {
+		return errors.New("select exactly one local exit role with explicit targets")
+	}
 	if _, e = control.ValidateSubnets(o.AllowSubnets); e != nil {
 		return e
 	}
@@ -326,6 +340,26 @@ func Run(ctx context.Context, o Options) error {
 	fmt.Fprintln(f, os.Getpid())
 	f.Close()
 	defer os.Remove(lock)
+	u, e := url.Parse(state.Server)
+	if e != nil {
+		return e
+	}
+	cleanupExit, e := exitguard.Install(ctx, o.Interface, u.Hostname(), o.ExitTargets)
+	if e != nil {
+		return e
+	}
+	defer func() {
+		// On unexpected terminal error keep the opt-in filter. Releasing it
+		// automatically could send a selected destination via the physical route.
+		if len(o.ExitTargets) > 0 && ctx.Err() == nil && runErr != nil {
+			runErr = errors.Join(runErr, errors.New("exit protection retained after failure; root must inspect and remove the Network EX nft table before reconnecting"))
+			return
+		}
+		if e := cleanupExit(); e != nil {
+			runErr = errors.Join(runErr, e)
+		}
+	}()
+
 	runDir, e := os.MkdirTemp(o.Dir, "run-")
 	if e != nil {
 		return e
@@ -334,11 +368,21 @@ func Run(ctx context.Context, o Options) error {
 	if o.RelayCA == "" {
 		o.RelayCA = state.CA
 	}
-	dns, closeDNS, e := startDNS(ctx, o.DNSListen)
-	if e != nil {
-		return e
+	var dns *dnsView
+	if o.DNSHub != nil {
+		dns, e = o.DNSHub.view(o.DNSProfile)
+		if e != nil {
+			return e
+		}
+		defer dns.Clear()
+	} else {
+		var closeDNS func()
+		dns, closeDNS, e = startDNS(ctx, o.DNSListen)
+		if e != nil {
+			return e
+		}
+		defer closeDNS()
 	}
-	defer closeDNS()
 	var stop context.CancelFunc
 	var done chan error
 	var applied [32]byte
@@ -454,7 +498,7 @@ func Run(ctx context.Context, o Options) error {
 				if applied != hash || stop == nil {
 					stopTunnel()
 					u, _ := url.Parse(state.Server)
-					cfg := tunnel.Config{Exports: snap.Exports, ProtectHosts: []string{u.Hostname()}, Interface: o.Interface, IP: snap.Device.IP, ListenPort: o.Port, WGKeyFile: filepath.Join(o.Dir, "wg.key"), IdentityKeyFile: filepath.Join(o.Dir, "identity.key"), StatusFile: filepath.Join(o.Dir, "tunnel.json")}
+					cfg := tunnel.Config{ManagedExit: true, Exports: snap.Exports, ProtectHosts: []string{u.Hostname()}, Interface: o.Interface, IP: snap.Device.IP, ListenPort: o.Port, WGKeyFile: filepath.Join(o.Dir, "wg.key"), IdentityKeyFile: filepath.Join(o.Dir, "identity.key"), StatusFile: filepath.Join(o.Dir, "tunnel.json")}
 					for i, p := range snap.Peers {
 						tokenPath := filepath.Join(runDir, fmt.Sprintf("peer-%d.token", i))
 						if e = os.WriteFile(tokenPath, []byte(p.Lease+"\n"), 0600); e != nil {
@@ -464,7 +508,12 @@ func Run(ctx context.Context, o Options) error {
 						if p.RelayNode == "" {
 							relayURL, stunURL = snap.RelayURL, snap.STUNURL
 						}
-						cfg.Peers = append(cfg.Peers, tunnel.Peer{Subnets: p.Subnets, Traffic: p.Traffic, IP: p.IP, PublicKey: p.WGKey, RelayURL: relayURL, RelayTokenFile: tokenPath, RelayCA: o.RelayCA, ICE: true, STUNURL: stunURL, ICEInterfaces: o.ICEInterfaces})
+						var targets, served []string
+						if p.ID == o.ExitVia {
+							targets = intersection(p.ExitTargets, o.ExitTargets)
+						}
+						served = intersection(p.ExitServed, o.AllowExitTargets)
+						cfg.Peers = append(cfg.Peers, tunnel.Peer{ExitTargets: targets, ExitServed: served, Subnets: p.Subnets, Traffic: p.Traffic, IP: p.IP, PublicKey: p.WGKey, RelayURL: relayURL, RelayTokenFile: tokenPath, RelayCA: o.RelayCA, ICE: true, STUNURL: stunURL, ICEInterfaces: o.ICEInterfaces})
 					}
 					if e = tunnel.Check(cfg); e != nil {
 						status("config-error", e.Error())
@@ -475,11 +524,15 @@ func Run(ctx context.Context, o Options) error {
 						ch := done
 						go func() { ch <- tunnel.Run(child, cfg) }()
 						applied = hash
-						dns.Update(snap)
 						status("applying", "")
 					}
 				} else {
-					dns.Update(snap)
+					var live tunnel.Status
+					if raw, err := os.ReadFile(filepath.Join(o.Dir, "tunnel.json")); err == nil && json.Unmarshal(raw, &live) == nil && live.State == "running" && live.IP == snap.Device.IP && time.Since(live.UpdatedAt) < 5*time.Second {
+						dns.Update(snap)
+					} else {
+						dns.Clear()
+					}
 					status("approved", "")
 				}
 			}
@@ -507,6 +560,19 @@ func publicPeers(peers []control.Peer) []PeerInfo {
 	out := make([]PeerInfo, 0, len(peers))
 	for _, p := range peers {
 		out = append(out, PeerInfo{ID: p.ID, Name: p.Name, IP: p.IP, RelayNode: p.RelayNode, Subnets: p.Subnets, DNSLabel: p.DNSLabel})
+	}
+	return out
+}
+
+func intersection(granted, local []string) []string {
+	var out []string
+	for _, g := range granted {
+		for _, v := range local {
+			if g == v {
+				out = append(out, g)
+				break
+			}
+		}
 	}
 	return out
 }

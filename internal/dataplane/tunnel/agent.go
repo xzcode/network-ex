@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xzcode/network-ex/internal/dataplane/path"
@@ -30,6 +31,7 @@ import (
 )
 
 type Config struct {
+	ManagedExit     bool     `json:"-"`
 	Exports         []string `json:"exports,omitempty"`
 	ProtectHosts    []string `json:"protect_hosts,omitempty"`
 	Interface       string   `json:"interface"`
@@ -41,6 +43,8 @@ type Config struct {
 	Peers           []Peer   `json:"peers"`
 }
 type Peer struct {
+	ExitTargets    []string                `json:"exit_targets,omitempty"`
+	ExitServed     []string                `json:"exit_served,omitempty"`
 	Subnets        []string                `json:"subnets,omitempty"`
 	Traffic        *protocol.TrafficPolicy `json:"traffic,omitempty"`
 	IP             string                  `json:"ip"`
@@ -115,7 +119,19 @@ func scopes(c Config) ([]netip.Prefix, []netip.Prefix, []guard.Peer, error) {
 		if e != nil {
 			return nil, nil, nil, e
 		}
-		gp := guard.Peer{Prefixes: append([]netip.Prefix{netip.PrefixFrom(a, 32)}, sub...), Policy: p.Traffic}
+		if !c.ManagedExit && (len(p.ExitTargets) > 0 || len(p.ExitServed) > 0) {
+			return nil, nil, nil, errors.New("exit requires managed authorization and local opt-in")
+		}
+		targets, e := protocol.ValidateExitTargets(p.ExitTargets)
+		if e != nil {
+			return nil, nil, nil, e
+		}
+		served, e := protocol.ValidateExitTargets(p.ExitServed)
+		if e != nil {
+			return nil, nil, nil, e
+		}
+		sub = append(sub, targets...)
+		gp := guard.Peer{Prefixes: append([]netip.Prefix{netip.PrefixFrom(a, 32)}, sub...), Policy: p.Traffic, ExitTargets: targets, ExitServed: served}
 		remote = append(remote, sub...)
 		peers = append(peers, gp)
 	}
@@ -264,6 +280,9 @@ func prepare(c Config) (netip.Addr, []transport.Peer, []netip.Addr, string, erro
 		for _, sub := range p.Subnets {
 			fmt.Fprintf(&u, "allowed_ip=%s\n", sub)
 		}
+		for _, target := range p.ExitTargets {
+			fmt.Fprintf(&u, "allowed_ip=%s/32\n", target)
+		}
 
 	}
 	for _, p := range peers {
@@ -293,6 +312,9 @@ func Check(c Config) error {
 	_, e = transport.New(p)
 	return e
 }
+
+var setupMu sync.Mutex
+
 func Run(ctx context.Context, c Config) error {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
 		return errors.New("unsupported platform")
@@ -314,6 +336,26 @@ func Run(ctx context.Context, c Config) error {
 		return e
 	}
 	if e = protectUnderlay(ctx, c, remote); e != nil {
+		return e
+	}
+	setupMu.Lock()
+	setupLocked := true
+	defer func() {
+		if setupLocked {
+			setupMu.Unlock()
+		}
+	}()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	var served, targets []netip.Prefix
+	for _, p := range c.Peers {
+		a, _ := protocol.ValidateExitTargets(p.ExitServed)
+		served = append(served, a...)
+		a, _ = protocol.ValidateExitTargets(p.ExitTargets)
+		targets = append(targets, a...)
+	}
+	if e = platform.PreflightExit(served, targets); e != nil {
 		return e
 	}
 	if e = platform.PreflightSubnets(c.Interface, own[1:], remote); e != nil {
@@ -345,6 +387,8 @@ func Run(ctx context.Context, c Config) error {
 	if e = platform.ConfigureSubnets(name, remote); e != nil {
 		return e
 	}
+	setupMu.Unlock()
+	setupLocked = false
 	if e = dev.Up(); e != nil {
 		return e
 	}

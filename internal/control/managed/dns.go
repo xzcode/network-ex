@@ -41,7 +41,16 @@ func (d *dnsView) Update(s protocol.Snapshot) {
 	d.records = records
 	d.until = s.ValidUntil
 }
-func (d *dnsView) answer(b []byte) ([]byte, error) {
+func (d *dnsView) lookup(name string) (ip [4]byte, found bool, until int64, ambiguous bool) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	ip, found = d.records[name]
+	return ip, found, d.until, false
+}
+
+type lookupFunc func(string) ([4]byte, bool, int64, bool)
+
+func dnsAnswer(b []byte, lookup lookupFunc) ([]byte, error) {
 	var q dnsmessage.Message
 	if len(b) > 4096 || q.Unpack(b) != nil || q.Header.Response || len(q.Questions) != 1 {
 		return nil, errors.New("invalid DNS query")
@@ -49,15 +58,12 @@ func (d *dnsView) answer(b []byte) ([]byte, error) {
 	question := q.Questions[0]
 	name := strings.ToLower(question.Name.String())
 	resp := dnsmessage.Message{Header: dnsmessage.Header{ID: q.Header.ID, Response: true, OpCode: q.Header.OpCode, RecursionDesired: q.Header.RecursionDesired}, Questions: q.Questions}
-	d.mu.RLock()
-	ip, ok := d.records[name]
-	until := d.until
-	d.mu.RUnlock()
+	ip, ok, until, ambiguous := lookup(name)
 	remaining := until - time.Now().Unix()
 	switch {
 	case q.Header.OpCode != 0 || question.Class != dnsmessage.ClassINET || !strings.HasSuffix(name, suffix):
 		resp.Header.RCode = dnsmessage.RCodeRefused
-	case remaining <= 0:
+	case ambiguous || remaining <= 0:
 		resp.Header.RCode = dnsmessage.RCodeServerFailure
 	case !ok:
 		resp.Header.Authoritative = true
@@ -74,26 +80,31 @@ func (d *dnsView) answer(b []byte) ([]byte, error) {
 	}
 	return resp.Pack()
 }
+func (d *dnsView) answer(b []byte) ([]byte, error) { return dnsAnswer(b, d.lookup) }
 func startDNS(ctx context.Context, address string) (*dnsView, func(), error) {
 	d := &dnsView{}
+	stop, e := listenDNS(ctx, address, d.answer, d.Clear)
+	return d, stop, e
+}
+func listenDNS(ctx context.Context, address string, answer func([]byte) ([]byte, error), clear func()) (func(), error) {
 	if address == "" {
-		return d, func() {}, nil
+		return func() { clear() }, nil
 	}
 	a, e := netip.ParseAddrPort(address)
 	if e != nil || !a.Addr().Is4() || !a.Addr().IsLoopback() || a.Port() == 0 {
-		return nil, nil, errors.New("DNS must bind a nonzero IPv4 loopback port")
+		return nil, errors.New("DNS must bind a nonzero IPv4 loopback port")
 	}
 	udp, e := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(a))
 	if e != nil {
-		return nil, nil, e
+		return nil, e
 	}
 	tcp, e := net.ListenTCP("tcp4", net.TCPAddrFromAddrPort(a))
 	if e != nil {
 		udp.Close()
-		return nil, nil, e
+		return nil, e
 	}
 	var once sync.Once
-	stop := func() { once.Do(func() { d.Clear(); udp.Close(); tcp.Close() }) }
+	stop := func() { once.Do(func() { clear(); udp.Close(); tcp.Close() }) }
 	context.AfterFunc(ctx, stop)
 	go func() {
 		buf := make([]byte, 4096)
@@ -105,7 +116,7 @@ func startDNS(ctx context.Context, address string) (*dnsView, func(), error) {
 			if !remote.IP.IsLoopback() {
 				continue
 			}
-			if reply, e := d.answer(buf[:n]); e == nil {
+			if reply, e := answer(buf[:n]); e == nil {
 				_, _ = udp.WriteToUDP(reply, remote)
 			}
 		}
@@ -142,7 +153,7 @@ func startDNS(ctx context.Context, address string) (*dnsView, func(), error) {
 				if _, e := io.ReadFull(c, b); e != nil {
 					return
 				}
-				reply, e := d.answer(b)
+				reply, e := answer(b)
 				if e != nil {
 					return
 				}
@@ -151,5 +162,5 @@ func startDNS(ctx context.Context, address string) (*dnsView, func(), error) {
 			}(c)
 		}
 	}()
-	return d, stop, nil
+	return stop, nil
 }

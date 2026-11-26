@@ -17,31 +17,39 @@ import (
 )
 
 type Snapshot struct {
-	Selected   bool   `json:"selected"`
-	State      string `json:"state"`
-	LocalType  string `json:"local_type,omitempty"`
-	RemoteType string `json:"remote_type,omitempty"`
-	DirectTx   uint64 `json:"direct_tx_bytes"`
-	DirectRx   uint64 `json:"direct_rx_bytes"`
-	Attempts   uint64 `json:"attempts"`
+	Selected                  bool   `json:"selected"`
+	State                     string `json:"state"`
+	LocalType                 string `json:"local_type,omitempty"`
+	RemoteType                string `json:"remote_type,omitempty"`
+	DirectTx                  uint64 `json:"direct_tx_bytes"`
+	DirectRx                  uint64 `json:"direct_rx_bytes"`
+	Attempts                  uint64 `json:"attempts"`
+	LastFailure               string `json:"last_failure,omitempty"`
+	LocalHostCandidates       int    `json:"local_host_candidates"`
+	LocalReflexiveCandidates  int    `json:"local_reflexive_candidates"`
+	RemoteHostCandidates      int    `json:"remote_host_candidates"`
+	RemoteReflexiveCandidates int    `json:"remote_reflexive_candidates"`
 }
 type ICE struct {
-	Relay                        *relay.Client
-	STUN                         string
-	Interface                    string
-	Excluded                     map[netip.Addr]bool
-	ExcludedPrefixes             []netip.Prefix
-	Interfaces                   []string
-	mu                           sync.RWMutex
-	c                            *ice.Conn
-	state, localType, remoteType string
-	tx, rx, attempts             atomic.Uint64
+	Relay                                                  *relay.Client
+	STUN                                                   string
+	Interface                                              string
+	Excluded                                               map[netip.Addr]bool
+	ExcludedPrefixes                                       []netip.Prefix
+	Interfaces                                             []string
+	mu                                                     sync.RWMutex
+	c                                                      *ice.Conn
+	state, localType, remoteType                           string
+	lastFailure                                            string
+	localHost, localReflexive, remoteHost, remoteReflexive int
+	tx, rx, attempts                                       atomic.Uint64
 }
 
 func (p *ICE) Snapshot() Snapshot {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return Snapshot{Selected: p.c != nil, State: p.state, LocalType: p.localType, RemoteType: p.remoteType, DirectTx: p.tx.Load(), DirectRx: p.rx.Load(), Attempts: p.attempts.Load()}
+	return Snapshot{Selected: p.c != nil, State: p.state, LocalType: p.localType, RemoteType: p.remoteType, DirectTx: p.tx.Load(), DirectRx: p.rx.Load(), Attempts: p.attempts.Load(), LastFailure: p.lastFailure,
+		LocalHostCandidates: p.localHost, LocalReflexiveCandidates: p.localReflexive, RemoteHostCandidates: p.remoteHost, RemoteReflexiveCandidates: p.remoteReflexive}
 }
 func (p *ICE) set(state string) { p.mu.Lock(); p.state = state; p.mu.Unlock() }
 func (p *ICE) clear() {
@@ -116,6 +124,44 @@ func (p *ICE) Validate() error {
 	}
 	return nil
 }
+func (p *ICE) recordFailure(phase string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	switch phase {
+	case "gathering", "signaling", "checking", "selected":
+		p.lastFailure = phase
+	default:
+		p.lastFailure = "unknown"
+	}
+}
+func (p *ICE) beginAttempt() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.state = "gathering"
+	p.localHost = 0
+	p.localReflexive = 0
+	p.remoteHost = 0
+	p.remoteReflexive = 0
+}
+func (p *ICE) candidate(local bool, t ice.CandidateType) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if local {
+		switch t {
+		case ice.CandidateTypeHost:
+			p.localHost++
+		case ice.CandidateTypeServerReflexive:
+			p.localReflexive++
+		}
+	} else {
+		switch t {
+		case ice.CandidateTypeHost:
+			p.remoteHost++
+		case ice.CandidateTypeServerReflexive:
+			p.remoteReflexive++
+		}
+	}
+}
 func (p *ICE) Run(ctx context.Context, deliver func([]byte)) {
 	delay := time.Second
 	for ctx.Err() == nil {
@@ -139,10 +185,18 @@ func (p *ICE) Run(ctx context.Context, deliver func([]byte)) {
 		}
 	}
 }
-func (p *ICE) session(parent context.Context, deliver func([]byte)) error {
+func (p *ICE) session(parent context.Context, deliver func([]byte)) (err error) {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	p.set("gathering")
+	p.beginAttempt()
+	// Register after generation cleanup below (which clears the selected state).
+	// Record a finite phase, never raw network errors or signaling credentials.
+	phase := "gathering"
+	defer func() {
+		if err != nil && parent.Err() == nil {
+			p.recordFailure(phase)
+		}
+	}()
 	disconnected, failed, keepalive := 4*time.Second, 8*time.Second, time.Second
 	cfg := &ice.AgentConfig{NetworkTypes: []ice.NetworkType{ice.NetworkTypeUDP4}, CandidateTypes: []ice.CandidateType{ice.CandidateTypeHost, ice.CandidateTypeServerReflexive}, MulticastDNSMode: ice.MulticastDNSModeDisabled, DisconnectedTimeout: &disconnected, FailedTimeout: &failed, KeepaliveInterval: &keepalive, InterfaceFilter: p.allowedInterface, IPFilter: p.allowedIP}
 	if p.STUN != "" {
@@ -211,7 +265,9 @@ func (p *ICE) session(parent context.Context, deliver func([]byte)) error {
 			break
 		}
 		offer.Candidates = append(offer.Candidates, c.Marshal())
+		p.candidate(true, c.Type())
 	}
+	phase = "signaling"
 	p.set("signaling")
 	ws, answer, e := p.Relay.Exchange(ctx, offer)
 	if e != nil {
@@ -233,11 +289,13 @@ func (p *ICE) session(parent context.Context, deliver func([]byte)) error {
 		}
 		if e = a.AddRemoteCandidate(c); e == nil {
 			remote++
+			p.candidate(false, c.Type())
 		}
 	}
 	if remote == 0 || len(offer.Candidates) == 0 {
 		return errors.New("no eligible ICE candidates")
 	}
+	phase = "checking"
 	p.set("checking")
 	check, done := context.WithTimeout(ctx, 12*time.Second)
 	var c *ice.Conn
@@ -267,7 +325,9 @@ func (p *ICE) session(parent context.Context, deliver func([]byte)) error {
 		return ctx.Err()
 	}
 	p.c = c
+	phase = "selected"
 	p.state = "selected"
+	p.lastFailure = ""
 	p.localType = pair.Local.Type().String()
 	p.remoteType = pair.Remote.Type().String()
 	p.mu.Unlock()

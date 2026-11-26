@@ -1,0 +1,18 @@
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.db
+*.db-wal
+*.db-shm
+*.sqlite*
+*.log
+/data/
+/dist/
+/bin/
+/node_modules/
+**/node_modules/
+**/target/
+.DS_Store

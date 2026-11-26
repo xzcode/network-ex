@@ -1,14 +1,17 @@
 # Network EX
 
-自主开发的跨平台虚拟局域网工具：点对点直连优先、端到端加密、中继兜底、可完全自托管。
+自主开发的跨平台虚拟局域网工具：端到端加密、P2P 直连优先、中继兜底、完全自托管。
 
-当前状态：M0 设计阶段，尚无可用的组网实现，禁止将设计标记为已验收。
+当前状态：M0 规范基线。尚无可用组网实现、安装包或线上服务。
 
+## 开发入口
 - [产品需求](docs/PRD.md)
-- [系统架构](docs/ARCHITECTURE.md)
-- [开发路线与验收](docs/ROADMAP.md)
-- [协作规范](AGENTS.md)
+- [架构](docs/ARCHITECTURE.md)
+- [服务端](docs/SERVER_DESIGN.md) / [客户端](docs/CLIENT_DESIGN.md)
+- [协议](docs/PROTOCOL.md) / [P2P](docs/P2P_DESIGN.md) / [中继](docs/RELAY_DESIGN.md)
+- [安全](docs/SECURITY.md) / [数据模型](docs/DATABASE.md)
+- [界面](docs/UI_DESIGN.md) / [部署](docs/DEPLOYMENT.md)
+- [路线与验收](docs/ROADMAP.md) / [技术决策](docs/DECISIONS.md)
+- [开发协作](AGENTS.md)
 
-目标平台：Windows、macOS、Linux；后续 Android、iOS。
-
-独立服务端程序支持 all / management / relay 三种模式；桌面应用与后台 Agent 分离。具体协议、部署与安全要求见 docs/。
+Windows、macOS、Linux 优先，Android/iOS 后续。单一服务端程序支持 all / management / relay 三种模式；桌面 UI 与后台 Agent 分离。所有功能以实测记录为准。

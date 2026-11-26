@@ -9,13 +9,13 @@ export ANDROID_HOME
 export ANDROID_NDK_HOME
 export GOTOOLCHAIN=local
 for x in go java javac gradle;do command -v "$x" >/dev/null||{ echo "Missing $x" >&2;exit 1; };done
-# Pin the native binding tool to the Go 1.23-compatible version.
+# Pin the native binding tool to the Go 1.26-compatible version.
 toolbin="$root/.mobile-tools/bin";mkdir -p "$toolbin" "$root/apps/android/app/libs"
 export GOBIN="$toolbin";export PATH="$toolbin:$PATH"
-go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20240520174638-fa72addaaa1b
-go install golang.org/x/mobile/cmd/gobind@v0.0.0-20240520174638-fa72addaaa1b
+go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20261117202452-47699113848a
+go install golang.org/x/mobile/cmd/gobind@v0.0.0-20261117202452-47699113848a
 cd "$root"
-# anet v0.0.3 (Pion dependency) references net.zoneCache on Android.
+# anet v0.0.5 (Pion dependency) references net.zoneCache on Android.
 # Keep this compatibility workaround Android-only and re-evaluate on upgrade.
 # https://github.com/wlynxg/anet/issues/11
 gomobile bind -ldflags="-checklinkname=0 -extldflags=-Wl,-z,max-page-size=16384,-z,common-page-size=16384" -target=android/arm64,android/amd64 -androidapi=26 -o apps/android/app/libs/network-ex-mobile.aar ./pkg/mobile

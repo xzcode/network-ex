@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/pion/stun"
+	"github.com/pion/stun/v4"
 	"github.com/xzcode/network-ex/internal/dataplane/discovery"
 	"github.com/xzcode/network-ex/internal/dataplane/ethernet"
 	"github.com/xzcode/network-ex/internal/dataplane/guard"

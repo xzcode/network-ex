@@ -8,8 +8,8 @@ xcrun --sdk iphoneos --show-sdk-path >/dev/null
 toolbin="$root/.mobile-tools/bin";mkdir -p "$toolbin" "$root/apps/ios/Frameworks"
 export GOBIN="$toolbin" PATH="$toolbin:$PATH" GOTOOLCHAIN=local
 cd "$root"
-go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20240520174638-fa72addaaa1b
-go install golang.org/x/mobile/cmd/gobind@v0.0.0-20240520174638-fa72addaaa1b
+go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20261117202452-47699113848a
+go install golang.org/x/mobile/cmd/gobind@v0.0.0-20261117202452-47699113848a
 go test ./...
 # iOS device and simulator slices. No signing credential in the repository.
 gomobile bind -target=ios,iossimulator -iosversion=16.0 -o apps/ios/Frameworks/Mobile.xcframework ./pkg/mobile

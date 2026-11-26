@@ -6,8 +6,8 @@ import (
 	"net"
 	"time"
 
-	pion "github.com/pion/transport/v2"
-	"github.com/pion/transport/v2/stdnet"
+	pion "github.com/pion/transport/v5"
+	"github.com/pion/transport/v5/stdnet"
 )
 
 // ICENet wraps every Pion transport socket creation path. M8 permits UDP4
@@ -104,4 +104,26 @@ func (n *ICENet) CreateDialer(d *net.Dialer) pion.Dialer {
 		copy.Timeout = 5 * time.Second
 	}
 	return protectedDialer{copy}
+}
+
+// Transport v5 adds a listen-config factory. Do not inherit stdnet's
+// implementation: that would create unprotected sockets.
+type protectedListenConfig struct{ c net.ListenConfig }
+
+func (c protectedListenConfig) Listen(ctx context.Context, network, address string) (net.Listener, error) {
+	return nil, errors.New("ICE TCP listener disabled")
+}
+func (c protectedListenConfig) ListenPacket(ctx context.Context, network, address string) (net.PacketConn, error) {
+	if !udp4(network) {
+		return nil, errors.New("protected ICE supports UDP4 only")
+	}
+	return c.c.ListenPacket(ctx, "udp4", address)
+}
+func (n *ICENet) CreateListenConfig(lc *net.ListenConfig) pion.ListenConfig {
+	var c net.ListenConfig
+	if lc != nil {
+		c = *lc
+	}
+	c.Control = n.p.Control
+	return protectedListenConfig{c}
 }

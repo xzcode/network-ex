@@ -2,8 +2,8 @@ name: iOS unsigned build
 on:
   workflow_dispatch:
   push:
-    branches: [master]
-    paths: ['.github/workflows/ios-build.yml']
+    branches: [master, 'codex/m9-security-candidate']
+    paths: ['.github/workflows/ios-build.yml', 'go.mod', 'go.sum']
 permissions:
   contents: read
 concurrency:

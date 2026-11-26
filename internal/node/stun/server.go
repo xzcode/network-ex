@@ -5,7 +5,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/pion/stun"
+	"github.com/pion/stun/v4"
 )
 
 // Binding-only IPv4 STUN. Limit response to the observed source tuple

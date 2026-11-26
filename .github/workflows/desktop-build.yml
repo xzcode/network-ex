@@ -2,8 +2,8 @@ name: Desktop native development builds
 on:
   workflow_dispatch:
   push:
-    branches: [master]
-    paths: ['.github/workflows/desktop-build.yml', 'apps/desktop/package-lock.json']
+    branches: [master, 'codex/m9-security-candidate']
+    paths: ['.github/workflows/desktop-build.yml', 'apps/desktop/package-lock.json', 'go.mod', 'go.sum']
 permissions:
   contents: read
 concurrency:

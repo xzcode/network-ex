@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pion/ice/v2"
-	"github.com/pion/stun"
+	"github.com/pion/ice/v4"
+	"github.com/pion/stun/v4"
 	"github.com/xzcode/network-ex/internal/dataplane/relay"
 	"github.com/xzcode/network-ex/internal/platform/protect"
 )
@@ -163,7 +163,7 @@ func (p *ICE) session(parent context.Context, deliver func([]byte)) error {
 	if e != nil {
 		return e
 	}
-	// Pion ICE v2 Close is not safe to call concurrently: serialize cleanup
+	// Pion ICE Close is not safe to call concurrently: serialize cleanup
 	// from both normal return and context cancellation.
 	var closeOnce sync.Once
 	closeAgent := func() { closeOnce.Do(func() { _ = a.Close() }) }

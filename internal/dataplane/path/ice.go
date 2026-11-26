@@ -39,22 +39,34 @@ type ICE struct {
 	Interfaces                                             []string
 	mu                                                     sync.RWMutex
 	c                                                      *ice.Conn
+	directContext                                          context.Context
+	directUntil                                            time.Time
 	state, localType, remoteType                           string
 	lastFailure                                            string
 	localHost, localReflexive, remoteHost, remoteReflexive int
 	tx, rx, attempts                                       atomic.Uint64
 }
 
+func (p *ICE) directAvailable(now time.Time) bool {
+	return p.c != nil && p.directContext != nil && p.directContext.Err() == nil && now.Before(p.directUntil)
+}
 func (p *ICE) Snapshot() Snapshot {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return Snapshot{Selected: p.c != nil, State: p.state, LocalType: p.localType, RemoteType: p.remoteType, DirectTx: p.tx.Load(), DirectRx: p.rx.Load(), Attempts: p.attempts.Load(), LastFailure: p.lastFailure,
+	selected := p.directAvailable(time.Now())
+	state := p.state
+	if state == "selected" && !selected {
+		state = "fallback"
+	}
+	return Snapshot{Selected: selected, State: state, LocalType: p.localType, RemoteType: p.remoteType, DirectTx: p.tx.Load(), DirectRx: p.rx.Load(), Attempts: p.attempts.Load(), LastFailure: p.lastFailure,
 		LocalHostCandidates: p.localHost, LocalReflexiveCandidates: p.localReflexive, RemoteHostCandidates: p.remoteHost, RemoteReflexiveCandidates: p.remoteReflexive}
 }
 func (p *ICE) set(state string) { p.mu.Lock(); p.state = state; p.mu.Unlock() }
 func (p *ICE) clear() {
 	p.mu.Lock()
 	p.c = nil
+	p.directContext = nil
+	p.directUntil = time.Time{}
 	p.localType = ""
 	p.remoteType = ""
 	p.state = "fallback"
@@ -63,8 +75,9 @@ func (p *ICE) clear() {
 func (p *ICE) Send(b []byte) error {
 	p.mu.RLock()
 	c := p.c
+	ok := p.directAvailable(time.Now())
 	p.mu.RUnlock()
-	if c == nil {
+	if !ok {
 		return errors.New("ICE path unavailable")
 	}
 	n, e := c.Write(b)
@@ -169,7 +182,7 @@ func (p *ICE) Run(ctx context.Context, deliver func([]byte)) {
 		started := time.Now()
 		_ = p.session(ctx, deliver)
 		p.clear()
-		if time.Since(started) > 30*time.Second {
+		if time.Since(started) > 30*time.Second || p.Snapshot().LastFailure == "selected" {
 			delay = time.Second
 		}
 		select {
@@ -197,7 +210,10 @@ func (p *ICE) session(parent context.Context, deliver func([]byte)) (err error) 
 			p.recordFailure(phase)
 		}
 	}()
-	disconnected, failed, keepalive := 4*time.Second, 8*time.Second, time.Second
+	// A brief outage should not force a new UDP port/NAT mapping. Fall
+	// back at four seconds but let ICE probe the existing authenticated
+	// pair until the bounded failure timeout (4 + 24 seconds).
+	disconnected, failed, keepalive := 4*time.Second, 24*time.Second, time.Second
 	cfg := &ice.AgentConfig{NetworkTypes: []ice.NetworkType{ice.NetworkTypeUDP4}, CandidateTypes: []ice.CandidateType{ice.CandidateTypeHost, ice.CandidateTypeServerReflexive}, MulticastDNSMode: ice.MulticastDNSModeDisabled, DisconnectedTimeout: &disconnected, FailedTimeout: &failed, KeepaliveInterval: &keepalive, InterfaceFilter: p.allowedInterface, IPFilter: p.allowedIP}
 	if p.STUN != "" {
 		u, e := stun.ParseURI(p.STUN)
@@ -217,18 +233,63 @@ func (p *ICE) session(parent context.Context, deliver func([]byte)) (err error) 
 	if e != nil {
 		return e
 	}
-	// Pion ICE Close is not safe to call concurrently: serialize cleanup
-	// from both normal return and context cancellation.
+	// All per-generation state uses p.mu, including the callback and
+	// publisher. A closed generation must never publish a direct path again.
+	active := true
+	connectedAt := time.Time{}
+	everSelected := false
+	deactivate := func() {
+		p.mu.Lock()
+		active = false
+		p.directContext = nil
+		p.directUntil = time.Time{}
+		connectedAt = time.Time{}
+		p.c = nil
+		p.localType = ""
+		p.remoteType = ""
+		p.state = "fallback"
+		p.mu.Unlock()
+	}
 	var closeOnce sync.Once
-	closeAgent := func() { closeOnce.Do(func() { _ = a.Close() }) }
+	closeAgent := func() { closeOnce.Do(func() { deactivate(); _ = a.GracefulClose() }) }
 	defer closeAgent()
 	stop := context.AfterFunc(ctx, closeAgent)
 	defer stop()
-	if e = a.OnConnectionStateChange(func(s ice.ConnectionState) {
-		switch s {
-		case ice.ConnectionStateDisconnected, ice.ConnectionStateFailed, ice.ConnectionStateClosed:
-			cancel()
+	if e = a.OnConnectionStateChange(func(state ice.ConnectionState) {
+		p.mu.Lock()
+		if !active {
+			p.mu.Unlock()
+			return
 		}
+		switch state {
+		case ice.ConnectionStateConnected, ice.ConnectionStateCompleted:
+			if connectedAt.IsZero() {
+				connectedAt = time.Now()
+			}
+		case ice.ConnectionStateDisconnected:
+			// Stop direct writes immediately; relay remains open. Do not cancel
+			// the ICE agent or its signal lease while the selected pair is probing.
+			connectedAt = time.Time{}
+			p.c = nil
+			p.localType = ""
+			p.remoteType = ""
+			if everSelected {
+				p.state = "reconnecting"
+				p.lastFailure = "selected"
+			}
+		case ice.ConnectionStateFailed, ice.ConnectionStateClosed:
+			connectedAt = time.Time{}
+			p.c = nil
+			p.localType = ""
+			p.remoteType = ""
+			p.state = "fallback"
+			p.mu.Unlock()
+			cancel()
+			return
+		default:
+			connectedAt = time.Time{}
+		}
+		p.mu.Unlock()
 	}); e != nil {
 		return e
 	}
@@ -278,6 +339,7 @@ func (p *ICE) session(parent context.Context, deliver func([]byte)) (err error) 
 	leaseTimer := time.AfterFunc(time.Until(time.Unix(answer.Expires, 0)), cancel)
 	defer leaseTimer.Stop()
 	go func() { defer cancel(); ws.ReadMessage() }()
+
 	remote := 0
 	for _, raw := range answer.Offer.Candidates {
 		c, e := ice.UnmarshalCandidate(raw)
@@ -308,30 +370,48 @@ func (p *ICE) session(parent context.Context, deliver func([]byte)) (err error) 
 	if e != nil {
 		return e
 	}
-	// Require an actually nominated pair and an additional stable interval.
-	// Both relay and ICE receivers stay open during the transition.
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(2 * time.Second):
-	}
-	pair, e := a.GetSelectedCandidatePair()
-	if e != nil || pair == nil {
-		return errors.New("no nominated ICE pair")
-	}
-	p.mu.Lock()
-	if ctx.Err() != nil {
-		p.mu.Unlock()
-		return ctx.Err()
-	}
-	p.c = c
+	// Publish only after the authenticated nominated pair has been
+	// connected continuously for two seconds. The publisher survives short
+	// disconnects and re-selects the same generation once ICE confirms liveness.
 	phase = "selected"
-	p.state = "selected"
-	p.lastFailure = ""
-	p.localType = pair.Local.Type().String()
-	p.remoteType = pair.Remote.Type().String()
-	p.mu.Unlock()
-	defer p.clear()
+	monitorCtx, monitorCancel := context.WithCancel(ctx)
+	monitorDone := make(chan struct{})
+	go func() {
+		defer close(monitorDone)
+		tick := time.NewTicker(200 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-monitorCtx.Done():
+				return
+			case <-tick.C:
+			}
+			p.mu.RLock()
+			since := connectedAt
+			ready := active && p.c == nil && !since.IsZero() && time.Since(since) >= 2*time.Second
+			p.mu.RUnlock()
+			if !ready {
+				continue
+			}
+			pair, err := a.GetSelectedCandidatePair()
+			if err != nil || pair == nil {
+				continue
+			}
+			p.mu.Lock()
+			if active && ctx.Err() == nil && time.Now().Unix() < answer.Expires && p.c == nil && connectedAt == since {
+				p.c = c
+				p.directContext = ctx
+				p.directUntil = time.Unix(answer.Expires, 0)
+				everSelected = true
+				p.state = "selected"
+				p.lastFailure = ""
+				p.localType = pair.Local.Type().String()
+				p.remoteType = pair.Remote.Type().String()
+			}
+			p.mu.Unlock()
+		}
+	}()
+	defer func() { monitorCancel(); <-monitorDone }()
 	buf := make([]byte, relay.MaxPacket)
 	for {
 		n, e := c.Read(buf)
@@ -340,6 +420,12 @@ func (p *ICE) session(parent context.Context, deliver func([]byte)) (err error) 
 		}
 		if n == 0 {
 			continue
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if time.Now().Unix() >= answer.Expires {
+			return errors.New("ICE lease expired")
 		}
 		p.rx.Add(uint64(n))
 		deliver(append([]byte(nil), buf[:n]...))

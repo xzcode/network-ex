@@ -1,0 +1,9 @@
+# M9 security upgrade candidate — do not release yet
+
+Branch only; not merged into master. Go minimum 1.26.11 (official release SHA256 verified); patched x/net 0.60.0, x/crypto 0.57.0, x/sys 0.48.0, Gorilla WebSocket v1.5.4-0.20240701034025-d67f41855da4. Go standard-library patch level enforced. Pion DTLS v2 is not yet migrated. Workflows select Go 1.26.11 on this branch, but have not been dispatched on it.
+
+Tokyo Linux verification: full go test ./... passed on the upgraded graph; rebuilt Go server, Agent and mobile fixture with Go1.26.11 and the minimum patch directive. scripts/m8-mobile.sh outside BIN all flow exited0: TLS/admin/owner isolation, mobile identity restore, approval, protected socket rejection, real desktop ICE and packet-flow relay TCP/UDP, reconnect, revocation/cleanup. No Android/iOS native runtime, Windows/macOS or full desktop package regression was run.
+
+Actual source scanner results: baseline govulncheck v1.1.4 on Go1.23.12 reported 40 reachable findings, 9 additional in imported packages, 48 module-level. Rebuilt compatible scanner govulncheck v1.10.0 on Go1.26.11 reports one reachable finding (GO-2026-4479, github.com/pion/dtls/v2, no fix listed in v2), zero additional imported-package findings, three module-level findings. Different scanner versions; comparison is directional, not proof of identical analysis or eliminated exploitability. Full reports in Tokyo artifacts/m9/govulncheck.txt and govulncheck-security-candidate.txt. A failed old-scanner attempt was superseded by the compatible scanner. Do not bypass the finding or declare the branch secure. Need migrate Pion stack with actual P2P/STUN/relay/Android native tests, re-evaluate old gomobile and toolchain/linkname compatibility, rescan all target platforms and review npm/Rust/C/OS dependencies. Do not publish a Release before safety and license review.
+
+Current master remains the prior development baseline while native packaging jobs complete.

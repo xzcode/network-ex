@@ -88,3 +88,6 @@ func Configure(name string, local netip.Addr, peers []netip.Addr) error {
 	}
 	return nil
 }
+
+// The Linux TUN device owns its addresses and /32 routes. Closing it removes them.
+func Cleanup(name string, local netip.Addr, peers []netip.Addr) {}

@@ -1,7 +1,6 @@
 # 状态与交接（2026-11-26）
 
-M0 完成。M1/M2 Linux IPv4 数据面核心完成：WireGuard、STUN、ICE/WSS 中继、隔离 NAT 实测与回退。详见 M1/M2_IMPLEMENTATION。
-M3.1–M3.8 管理服务核心已实现：SQLite、管理员/成员、网络/IPAM、一次性邀请、设备审批/撤销、设备签名快照/防重放、双向设备对 ACL、租约自动续期、内置 Web、all/management/relay。
-版本 0.3.0-dev-m3。Go tests、all 与 split 三设备隔离网络完整脚本均通过（实际 TCP/UDP、P2P+relay、审批/ACL/撤销、管理停机约18s fail closed、SQLite重启持久化/恢复）。详见 M3_IMPLEMENTATION.md。
-未完成的生产验收：管理 Agent 变更配置/租约时重建 tunnel；独立 relay 仍按签名 lease 到期撤销，无分布式即时撤销；多网络/端口 ACL/真实公网、IPv6、长期性能、安全评审、跨平台及浏览器交互尚未验收。无公网部署、无 release。
-下一阶段 M4：提取共享 protocol 以消除 Agent SQLite/CGO 耦合，安全 IPC、后台服务生命周期、Tauri/Vue 桌面 UI 与主题/i18n、Windows/macOS/Linux 虚拟网卡与路由适配、各平台真实安装验收；再 M5 多中继扩展。项目许可证及依赖安全需复核。
+M0 完成；M1/M2 Linux IPv4 数据面核心与 M3 管理服务核心已实测通过（详见各阶段文档）。
+M4 版本 0.4.0-dev-m4：共享 protocol 解耦 Agent/SQLite，daemon/ctl 安全 IPC、后台自动恢复、Vue/Tauri 桌面源码、状态/设备/拓扑/监控/诊断、系统托盘源码、中英及主题、Linux/macOS/Windows 路由和服务候选实现、安装脚本/sidecar 构建脚本。Linux amd64/arm64、Windows amd64、macOS Intel/arm64 Agent 跨编译成功；Vue 生产构建成功；Linux IPC 组权限及三设备完整 daemon integration 实测通过。首次验收暴露 Pion ICE 并发 Close 崩溃，已修复并重新通过。见 M4_IMPLEMENTATION.md。
+M4 尚未严格结束：首尔无 Rust/GUI 依赖，Tauri 原生壳、GUI 实际交互、系统服务真实安装、Windows 标准用户授权与 Wintun、macOS utun/签名、跨平台安装包未验收。无 release，无公网部署。M3 续期可能短暂断连、独立 relay 到期撤销、单网络限制等仍保留。
+下一批：补齐 M4 原生验证和安装门槛；M5 多中继节点注册、心跳、目录、双端调度、配额、drain、故障转移、分布式控制面；生产安全、实际公网、许可证与依赖审查仍需完成。

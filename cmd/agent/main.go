@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,14 +13,18 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
+	"github.com/xzcode/network-ex/internal/control/daemon"
 	"github.com/xzcode/network-ex/internal/control/managed"
 	"github.com/xzcode/network-ex/internal/dataplane/relay"
 	"github.com/xzcode/network-ex/internal/dataplane/tunnel"
+	"github.com/xzcode/network-ex/internal/platform/ipc"
+	"github.com/xzcode/network-ex/internal/platform/service"
 	"golang.org/x/crypto/curve25519"
 )
 
-const version = "0.3.0-dev-m3"
+const version = "0.4.0-dev-m4"
 
 func main() {
 	if e := run(os.Args[1:]); e != nil {
@@ -29,7 +34,7 @@ func main() {
 }
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: agent version | keygen | check | run | status | managed-enroll | managed-run")
+		return errors.New("usage: agent version | keygen | check | run | status | managed-enroll | managed-run | daemon | ctl")
 	}
 	switch args[0] {
 	case "version":
@@ -75,6 +80,48 @@ func run(args []string) error {
 		}
 		fmt.Printf("%x\n", pub)
 		return nil
+	case "daemon":
+		f := flag.NewFlagSet("daemon", flag.ContinueOnError)
+		root := f.String("state-root", daemon.DefaultRoot(), "prepared private service root")
+		sock := f.String("socket", ipc.DefaultAddress(), "local IPC address")
+		gid := f.Int("socket-gid", -1, "Unix socket group id; default process group")
+		iface := f.String("interface", daemon.DefaultInterface(), "overlay interface")
+		port := f.Uint("listen-port", 51820, "UDP port")
+		iceIf := f.String("ice-interfaces", "", "comma-separated ICE interface allowlist")
+		if e := f.Parse(args[1:]); e != nil {
+			return e
+		}
+		if *port == 0 || *port > 65535 {
+			return errors.New("invalid listen-port")
+		}
+		var ifaces []string
+		for _, v := range strings.Split(*iceIf, ",") {
+			if v = strings.TrimSpace(v); v != "" {
+				ifaces = append(ifaces, v)
+			}
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return service.Run(ctx, func(c context.Context) error {
+			return daemon.Serve(c, daemon.Options{Root: *root, Socket: *sock, SocketGID: *gid, Interface: *iface, Port: uint16(*port), ICEInterfaces: ifaces})
+		})
+	case "ctl":
+		f := flag.NewFlagSet("ctl", flag.ContinueOnError)
+		sock := f.String("socket", ipc.DefaultAddress(), "local IPC address")
+		if e := f.Parse(args[1:]); e != nil {
+			return e
+		}
+		req, e := daemon.ReadRequest(os.Stdin)
+		if e != nil {
+			return e
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		res, e := daemon.Call(ctx, *sock, req)
+		if e != nil {
+			return e
+		}
+		return json.NewEncoder(os.Stdout).Encode(res)
 	case "managed-enroll":
 		f := flag.NewFlagSet("managed-enroll", flag.ContinueOnError)
 		server := f.String("server", "", "management HTTPS origin")
@@ -96,7 +143,7 @@ func run(args []string) error {
 	case "managed-run":
 		f := flag.NewFlagSet("managed-run", flag.ContinueOnError)
 		dir := f.String("state-dir", "", "enrolled state directory")
-		iface := f.String("interface", "nex0", "TUN interface name")
+		iface := f.String("interface", daemon.DefaultInterface(), "TUN interface name")
 		port := f.Uint("listen-port", 51820, "UDP port")
 		iceIf := f.String("ice-interfaces", "", "comma-separated interface allowlist")
 		relayCA := f.String("relay-ca", "", "optional separate relay CA")

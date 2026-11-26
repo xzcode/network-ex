@@ -76,7 +76,7 @@ func (p *ICE) allowedIP(ip net.IP) bool {
 	return a.Is4() && !a.IsUnspecified() && !a.IsLoopback() && !a.IsMulticast() && !a.IsLinkLocalUnicast() && !p.Excluded[a]
 }
 func (p *ICE) allowedInterface(name string) bool {
-	if name == p.Interface || name == "lo" {
+	if name == p.Interface || name == "lo" || strings.HasPrefix(name, "utun") {
 		return false
 	}
 	if len(p.Interfaces) > 0 {
@@ -149,22 +149,26 @@ func (p *ICE) session(parent context.Context, deliver func([]byte)) error {
 	if e != nil {
 		return e
 	}
-	defer a.Close()
-	stop := context.AfterFunc(ctx, func() { a.Close() })
+	// Pion ICE v2 Close is not safe to call concurrently: serialize cleanup
+	// from both normal return and context cancellation.
+	var closeOnce sync.Once
+	closeAgent := func() { closeOnce.Do(func() { _ = a.Close() }) }
+	defer closeAgent()
+	stop := context.AfterFunc(ctx, closeAgent)
 	defer stop()
 	if e = a.OnConnectionStateChange(func(s ice.ConnectionState) {
 		switch s {
 		case ice.ConnectionStateDisconnected, ice.ConnectionStateFailed, ice.ConnectionStateClosed:
-			p.clear()
 			cancel()
 		}
 	}); e != nil {
 		return e
 	}
 	gathered := make(chan struct{})
+	var gatherOnce sync.Once
 	if e = a.OnCandidate(func(c ice.Candidate) {
 		if c == nil {
-			close(gathered)
+			gatherOnce.Do(func() { close(gathered) })
 		}
 	}); e != nil {
 		return e

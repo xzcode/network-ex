@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/xzcode/network-ex/internal/dataplane/path"
 	"github.com/xzcode/network-ex/internal/dataplane/relay"
 	"github.com/xzcode/network-ex/internal/dataplane/transport"
+	"github.com/xzcode/network-ex/internal/platform/localfile"
 	platform "github.com/xzcode/network-ex/internal/platform/tun"
 	"golang.zx2c4.com/wireguard/device"
 	wgtun "golang.zx2c4.com/wireguard/tun"
@@ -88,7 +90,7 @@ func prepare(c Config) (netip.Addr, []transport.Peer, []netip.Addr, string, erro
 	if e != nil {
 		return bad(e)
 	}
-	if c.Interface == "" || len(c.Interface) > 15 || strings.ContainsAny(c.Interface, " /\t\n") || c.ListenPort == 0 || len(c.Peers) > 64 {
+	if !regexp.MustCompile("^[A-Za-z][A-Za-z0-9_-]{0,14}$").MatchString(c.Interface) || c.ListenPort == 0 || len(c.Peers) > 64 {
 		return bad(errors.New("interface, fixed listen port, and 0–64 peers required"))
 	}
 	key, e := relay.ReadHex(c.WGKeyFile, 32, true)
@@ -133,8 +135,7 @@ func prepare(c Config) (netip.Addr, []transport.Peer, []netip.Addr, string, erro
 			if e != nil {
 				return bad(e)
 			}
-			st, e := os.Stat(p.RelayTokenFile)
-			if e != nil || !st.Mode().IsRegular() || st.Mode().Perm()&0077 != 0 || st.Size() > 4096 {
+			if e := localfile.Check(p.RelayTokenFile, false, 4096); e != nil {
 				return bad(errors.New("unsafe relay token file"))
 			}
 			token, e := os.ReadFile(p.RelayTokenFile)
@@ -169,8 +170,8 @@ func Check(c Config) error {
 	return e
 }
 func Run(ctx context.Context, c Config) error {
-	if runtime.GOOS != "linux" {
-		return errors.New("M3 runtime is Linux only")
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		return errors.New("unsupported platform")
 	}
 	ip, peers, routes, u, e := prepare(c)
 	if e != nil {
@@ -193,9 +194,10 @@ func Run(ctx context.Context, c Config) error {
 	if e != nil {
 		return e
 	}
-	if name != c.Interface {
+	if name != c.Interface && !(runtime.GOOS == "darwin" && c.Interface == "utun" && regexp.MustCompile("^utun[0-9]+$").MatchString(name)) {
 		return errors.New("unexpected TUN name")
 	}
+	defer platform.Cleanup(name, ip, routes)
 	if e = dev.IpcSet(u); e != nil {
 		return e
 	}

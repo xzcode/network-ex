@@ -1,0 +1,10 @@
+{
+  "identifier": "main",
+  "description": "Local window, typed Agent command only.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default"
+  ]
+}

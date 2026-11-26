@@ -1,0 +1,10 @@
+import {execFileSync} from 'node:child_process';import fs from 'node:fs';import path from 'node:path';import {fileURLToPath} from 'node:url';
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const triple=process.argv[2]||execFileSync('rustc',['-vV'],{encoding:'utf8'}).match(/^host:\s+(\S+)/m)?.[1];
+if(!triple)throw Error('Specify the Rust target triple');
+const m={'x86_64-unknown-linux-gnu':['linux','amd64'],'aarch64-unknown-linux-gnu':['linux','arm64'],'x86_64-apple-darwin':['darwin','amd64'],'aarch64-apple-darwin':['darwin','arm64'],'x86_64-pc-windows-msvc':['windows','amd64'],'aarch64-pc-windows-msvc':['windows','arm64']};
+const target=m[triple];if(!target)throw Error('Unsupported target '+triple);
+const dir=path.join(root,'apps/desktop/src-tauri/binaries');fs.mkdirSync(dir,{recursive:true});
+const dest=path.join(dir,'network-ex-agent-'+triple+(target[0]==='windows'?'.exe':''));
+execFileSync('go',['build','-trimpath','-o',dest,'./cmd/agent'],{cwd:root,stdio:'inherit',env:{...process.env,CGO_ENABLED:'0',GOOS:target[0],GOARCH:target[1]}});
+console.log(dest);

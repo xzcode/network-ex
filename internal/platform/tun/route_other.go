@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !darwin && !windows
 
 package tun
 
@@ -14,3 +14,5 @@ func Configure(name string, local netip.Addr, peers []netip.Addr) error {
 func Preflight(name string, local netip.Addr, peers []netip.Addr) error {
 	return errors.New("M2 route integration supports Linux only")
 }
+
+func Cleanup(name string, local netip.Addr, peers []netip.Addr) {}

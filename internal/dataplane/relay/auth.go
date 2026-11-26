@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/xzcode/network-ex/internal/platform/localfile"
 	"os"
 	"strings"
 	"time"
@@ -95,8 +96,13 @@ func ReadHex(path string, n int, secret bool) ([]byte, error) {
 	if e != nil {
 		return nil, e
 	}
-	if !info.Mode().IsRegular() || info.Size() > 4096 || (secret && info.Mode().Perm()&0077 != 0) {
+	if !info.Mode().IsRegular() || info.Size() > 4096 {
 		return nil, errors.New("unsafe key file permissions or size")
+	}
+	if secret {
+		if e := localfile.Check(path, false, 4096); e != nil {
+			return nil, e
+		}
 	}
 	b, e := os.ReadFile(path)
 	if e != nil {
@@ -114,6 +120,9 @@ func WriteSecret(path string, b []byte) error {
 		return e
 	}
 	defer f.Close()
+	if e = localfile.Check(path, false, 4096); e != nil {
+		return e
+	}
 	_, e = f.WriteString(hex.EncodeToString(b) + "\n")
 	return e
 }

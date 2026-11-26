@@ -2,10 +2,10 @@
 
 自主开发的跨平台虚拟局域网工具：端到端加密、P2P 直连优先、中继兜底、完全自托管。
 
-当前状态：M3 Linux 开发版。WireGuard/ICE/WSS 混合组网与 SQLite 管理服务已实现，三设备自动注册、审批、ACL、撤销、重启恢复已通过单机及拆分模式隔离网络验收；桌面客户端、跨平台和生产验收未完成。详见 [M3 实现与验收](docs/M3_IMPLEMENTATION.md)、[阶段状态](docs/STATUS.md)。
+当前状态：M4 开发版。M1–M3 Linux 数据面和管理服务核心实测通过；M4 daemon/IPC 实测、五种 Agent 目标构建、Vue 前端构建通过。原生桌面壳、Windows/macOS 实机及正式安装包尚未验收。详见 [M4 实现与验收](docs/M4_IMPLEMENTATION.md)、[阶段状态](docs/STATUS.md)。
 
 ## 构建
-Go 1.23、CGO 和 C 编译器；Linux 运行时。详见 M3 文档和 scripts/m3-managed.sh。
+Go 1.23；服务端需 CGO/C 编译器，Agent 支持 CGO_ENABLED=0。桌面 Vue/Tauri 工程位于 apps/desktop，详见 M4 文档。
 ```sh
 go test ./...
 go build ./cmd/agent

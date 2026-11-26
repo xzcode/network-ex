@@ -20,9 +20,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xzcode/network-ex/internal/control"
 	"github.com/xzcode/network-ex/internal/dataplane/relay"
 	"github.com/xzcode/network-ex/internal/dataplane/tunnel"
+	"github.com/xzcode/network-ex/internal/platform/localfile"
+	control "github.com/xzcode/network-ex/pkg/protocol"
 	"golang.org/x/crypto/curve25519"
 )
 
@@ -92,7 +93,13 @@ func (c *Client) post(ctx context.Context, path string, in, out any) error {
 	}
 	return json.Unmarshal(b, out)
 }
-func readSmallSecret(path string) (string, error) { return control.PasswordFile(path) }
+func readSmallSecret(path string) (string, error) {
+	if e := localfile.Check(path, false, 512); e != nil {
+		return "", e
+	}
+	b, e := os.ReadFile(path)
+	return strings.TrimRight(string(b), "\r\n"), e
+}
 func writeJSON(path string, v any) error {
 	b, e := json.MarshalIndent(v, "", "  ")
 	if e != nil {
@@ -145,6 +152,9 @@ func Enroll(ctx context.Context, server, ca, inviteFile, name, dir string) (cont
 	if e = os.Mkdir(dir, 0700); e != nil {
 		return d, fmt.Errorf("create new state directory: %w", e)
 	}
+	if e = localfile.Check(dir, true, 0); e != nil {
+		return d, e
+	}
 	pub, identity, e := ed25519.GenerateKey(rand.Reader)
 	if e != nil {
 		return d, e
@@ -181,20 +191,12 @@ func Enroll(ctx context.Context, server, ca, inviteFile, name, dir string) (cont
 }
 func Load(dir string) (State, error) {
 	var s State
-	st, e := os.Lstat(dir)
-	if e != nil {
+	if e := localfile.Check(dir, true, 0); e != nil {
 		return s, e
-	}
-	if !st.IsDir() || st.Mode().Perm()&0077 != 0 {
-		return s, errors.New("managed state directory must be 0700")
 	}
 	path := filepath.Join(dir, "state.json")
-	info, e := os.Lstat(path)
-	if e != nil {
+	if e := localfile.Check(path, false, 8192); e != nil {
 		return s, e
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() > 8192 {
-		return s, errors.New("unsafe state file")
 	}
 	b, e := os.ReadFile(path)
 	if e != nil {
@@ -227,12 +229,18 @@ type Options struct {
 	Port                    uint16
 	ICEInterfaces           []string
 }
-type localStatus struct {
+type PeerInfo struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	IP   string `json:"ip"`
+}
+type LocalStatus struct {
 	State      string         `json:"state"`
 	Device     control.Device `json:"device"`
 	Revision   int64          `json:"revision"`
 	ValidUntil int64          `json:"valid_until"`
 	PeerCount  int            `json:"peer_count"`
+	Peers      []PeerInfo     `json:"peers"`
 	UpdatedAt  time.Time      `json:"updated_at"`
 	Error      string         `json:"error,omitempty"`
 }
@@ -288,7 +296,7 @@ func Run(ctx context.Context, o Options) error {
 	defer stopTunnel()
 	var last control.Snapshot
 	status := func(mode, err string) {
-		_ = writeJSON(filepath.Join(o.Dir, "managed.json"), localStatus{State: mode, Device: last.Device, Revision: last.Revision, ValidUntil: expiry, PeerCount: len(last.Peers), UpdatedAt: time.Now().UTC(), Error: err})
+		_ = writeJSON(filepath.Join(o.Dir, "managed.json"), LocalStatus{State: mode, Device: last.Device, Revision: last.Revision, ValidUntil: expiry, PeerCount: len(last.Peers), Peers: publicPeers(last.Peers), UpdatedAt: time.Now().UTC(), Error: err})
 	}
 	defer func() {
 		if ctx.Err() != nil {
@@ -394,4 +402,12 @@ func Run(ctx context.Context, o Options) error {
 		}
 	}
 	return nil
+}
+
+func publicPeers(peers []control.Peer) []PeerInfo {
+	out := make([]PeerInfo, 0, len(peers))
+	for _, p := range peers {
+		out = append(out, PeerInfo{p.ID, p.Name, p.IP})
+	}
+	return out
 }

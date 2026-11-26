@@ -1,0 +1,27 @@
+[Unit]
+Description=Network EX managed network agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=network-ex
+UMask=0077
+StateDirectory=network-ex
+StateDirectoryMode=0700
+RuntimeDirectory=network-ex
+RuntimeDirectoryMode=0750
+ExecStart=/usr/local/libexec/network-ex/network-ex-agent daemon -state-root /var/lib/network-ex -socket /run/network-ex/agent.sock
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=40
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/network-ex /run/network-ex
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET
+
+[Install]
+WantedBy=multi-user.target

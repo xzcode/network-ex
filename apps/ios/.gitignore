@@ -1,0 +1,9 @@
+Frameworks/
+NetworkEX.xcodeproj/
+build/
+*.xcarchive
+*.ipa
+*.mobileprovision
+*.p12
+*.xcuserstate
+xcuserdata/

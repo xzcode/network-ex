@@ -1,21 +1,37 @@
-# Network EX for iOS — implementation plan
+# Network EX iOS (M8c candidate)
 
-Status: design only, not an iOS application or a signed extension. The Android file-descriptor bridge is not a supported way to access an iOS VPN interface.
+The SwiftUI application, Objective-C NEPacketTunnelProvider, Go packet queue and Keychain bridge are implemented as source. The Go iOS package and Objective-C bindings have been generated successfully on Linux; the native Xcode build and signed iPhone installation have NOT been run.
 
-## Architecture
+## Build on macOS
 
-- SwiftUI host app uses NETunnelProviderManager to install a user-approved VPN configuration. Explicit connect/disconnect, enrollment and approval status, no automatic always-on or full-tunnel policy.
-- Separate NEPacketTunnelProvider target uses NEPacketTunnelFlow.readPackets and writePackets, not private utun descriptors. Call setTunnelNetworkSettings with assigned IPv4 /32 and only authorized overlay routes; wait for completion before reporting the packet tunnel started.
-- Add a bounded Go packet-queue adapter implementing wireguard-go tun.Device, with generation-specific ownership, bounded queue and cancellation, instead of Android's detached file descriptor. Reuse the managed authorization loop and authenticated encrypted relay. Implement platform-specific outbound connection/route exclusion and verify management/relay reachability before adding routes. Do not pretend that returning true from a socket-protection callback is an iOS equivalent of VpnService.protect.
-- Use an explicitly configured App Group for extension/host configuration exchange, Keychain access group for device secrets, and never pass private keys through providerConfiguration or logs. A separate Swift credential/storage adapter is required; the Android file layout is not a final iOS key-storage design.
-- Initial mode is IPv4 peer /32 split routing and WSS relay. P2P requires a separately verified network-interface selection and socket routing approach. No default route, subnets, game broadcast/TAP, always-on, DNS override, or exit routes until independently implemented and tested.
-- Xcode, a Mac, Apple signing/provisioning and Network Extension entitlement com.apple.developer.networking.networkextension with packet-tunnel-provider capability are required. Use separately configured bundle IDs and App Group IDs; do not invent a signing team or ship placeholder entitlements as production credentials.
+Prerequisites: compatible Xcode/iOS SDK, Go 1.23.12, XcodeGen, and an Apple Developer account with the Packet Tunnel Provider and Keychain Sharing capabilities for actual installation. The project uses the iOS 16 deployment target.
 
-## Native validation gates
+```sh
+bash scripts/build-ios.sh compile
+```
 
-Build Go bindings as XCFramework, compile host app and packet tunnel extension; verify signed installation; permission acceptance/rejection; enrollment, approval, authorization revocation; real peer TCP/UDP; TLS/underlay routing; background/foreground and Wi-Fi/mobile transitions; stop/cancel and route teardown; expiry when management unreachable; battery/resource use. Only claim iOS support after the real extension is built and exercised.
+This generates a static Mobile.xcframework with device and simulator slices, generates NetworkEX.xcodeproj and attempts an unsigned device compile. It does not create an installable IPA.
 
-Apple references:
-- https://developer.apple.com/documentation/NetworkExtension/NEPacketTunnelProvider
-- https://developer.apple.com/documentation/NetworkExtension/routing-your-vpn-network-traffic
+For a signed archive, register the host bundle ID and its .packet-tunnel extension ID, configure provisioning and the shared access group, then set the actual values:
+```sh
+export DEVELOPMENT_TEAM=YOUR_TEAM_ID
+export NETWORK_EX_BUNDLE_ID=YOUR_REGISTERED_HOST_BUNDLE_ID
+export NETWORK_EX_KEYCHAIN_GROUP=YOUR_REGISTERED_KEYCHAIN_ACCESS_GROUP
+bash scripts/build-ios.sh archive
+```
+The group includes the actual AppIdentifierPrefix. Both targets must be signed by compatible provisioning profiles with the same configured Keychain group. The script never guesses credentials, team IDs or provisioning profiles. Verify the archive entitlements and separately export/install with your development/distribution settings. The manual iOS unsigned-build GitHub Actions workflow is optional and has not been dispatched.
+
+## Use
+
+Register from the app with the HTTPS management origin, device name, one-time invitation and optional private CA. The private keys are generated locally, transferred as a bounded opaque bundle into Keychain with AfterFirstUnlockThisDeviceOnly, and never placed in providerConfiguration. Host enrollment staging and extension runtime files live only in their respective protected private containers, excluded from backup. Runtime files are needed by the shared Go implementation and are not a Secure Enclave key store; they are removed on orderly stop and stale runtime state is removed on subsequent startup under a lock. Hard termination can leave protected runtime files until that cleanup.
+
+After administrator approval, connect using the normal system VPN consent dialog. The app creates only its own NETunnelProviderManager configuration and uses a status-only provider message. The initial version is peer /32 IPv4 split routing over authenticated WSS relay. The provider uses the public NEPacketTunnelFlow API and does not obtain a private utun file descriptor. Socket binding uses the selected physical interface index with IP_BOUND_IF/IPV6_BOUND_IF, not an unconditional callback. IPv4 control/relay DNS resolution and interface selection need native validation. Physical network interface changes stop the session; reconnect manually. No always-on, Internet default route, iOS P2P, subnet/exit, DNS override, IPv6 overlay or TAP mode is claimed.
+
+## Verification gates
+
+Native build, Apple signing and actual iPhone runtime are still required. Test provisioning, Keychain access before/after unlock, approval and revoke, peer TCP/UDP, TLS, route overlap, underlay socket binding, Wi-Fi/cellular transitions, extension start/stop/background, lease expiry and stale packet callbacks. See [M8c implementation and actual results](../../docs/M8C_IMPLEMENTATION.md).
+
+Apple API references:
+- https://developer.apple.com/documentation/networkextension/nepackettunnelflow
 - https://developer.apple.com/documentation/networkextension/netunnelprovider/settunnelnetworksettings(_:completionhandler:)
+- https://developer.apple.com/documentation/security/sharing-access-to-keychain-items-among-a-collection-of-apps

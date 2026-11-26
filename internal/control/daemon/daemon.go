@@ -203,7 +203,7 @@ func (d *Daemon) stopRun(persist bool) error {
 }
 func (d *Daemon) status() Status {
 	d.reap()
-	s := Status{Platform: runtime.GOOS, Version: "0.8.1-dev-m8", Running: d.done != nil, Desired: d.desired, Error: d.lastErr}
+	s := Status{Platform: runtime.GOOS, Version: "0.8.2-dev-m8", Running: d.done != nil, Desired: d.desired, Error: d.lastErr}
 	if _, e := os.Lstat(d.profile()); e == nil {
 		s.ProfileExists = true
 	}

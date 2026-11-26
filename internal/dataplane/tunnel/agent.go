@@ -208,6 +208,7 @@ func protectUnderlay(ctx context.Context, c Config, remote []netip.Prefix) error
 			return fmt.Errorf("cannot verify protected host %s", h)
 		}
 		for _, a := range ips {
+			a = a.Unmap()
 			for _, p := range remote {
 				if p.Contains(a) {
 					return fmt.Errorf("remote subnet %s captures underlay endpoint %s", p, h)

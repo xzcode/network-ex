@@ -1,0 +1,70 @@
+name: NetworkEX
+options:
+  deploymentTarget:
+    iOS: "16.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    CLANG_ENABLE_OBJC_ARC: YES
+    CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: "0.8.2"
+    CURRENT_PROJECT_VERSION: "802"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    ENABLE_BITCODE: NO
+    NETWORK_EX_BUNDLE_ID: com.xzcode.networkex
+    NETWORK_EX_PROVIDER_ID: $(NETWORK_EX_BUNDLE_ID).packet-tunnel
+    NETWORK_EX_KEYCHAIN_GROUP: $(AppIdentifierPrefix)com.xzcode.networkex.shared
+targets:
+  NetworkEX:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+        excludes: [Info.plist, NetworkEX.entitlements]
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(NETWORK_EX_BUNDLE_ID)
+        INFOPLIST_FILE: App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/NetworkEX.entitlements
+        SWIFT_OBJC_BRIDGING_HEADER: App/NetworkEX-Bridging-Header.h
+        TARGETED_DEVICE_FAMILY: "1,2"
+    dependencies:
+      - framework: Frameworks/Mobile.xcframework
+        embed: false
+      - sdk: NetworkExtension.framework
+      - sdk: Security.framework
+      - target: PacketTunnel
+        embed: true
+  PacketTunnel:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Tunnel
+        excludes: [Info.plist, PacketTunnel.entitlements]
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(NETWORK_EX_PROVIDER_ID)
+        INFOPLIST_FILE: Tunnel/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Tunnel/PacketTunnel.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+    dependencies:
+      - framework: Frameworks/Mobile.xcframework
+        embed: false
+      - sdk: NetworkExtension.framework
+      - sdk: Network.framework
+      - sdk: Security.framework
+schemes:
+  NetworkEX:
+    build:
+      targets:
+        NetworkEX: all
+        PacketTunnel: all
+    run:
+      config: Debug
+    archive:
+      config: Release

@@ -35,7 +35,7 @@ unblock_mobile_udp(){
 }
 block_mobile_udp
 mobile_flags=()
-if [[ "$DIRECT_TEST" == direct ]];then mobile_flags=(-direct);fi
+if [[ "$DIRECT_TEST" == direct ]];then mobile_flags=(-direct);elif [[ "$DIRECT_TEST" == flow ]];then mobile_flags=(-flow);fi
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=192.0.2.1 -addext subjectAltName=IP:192.0.2.1 -keyout "$D/tls.key" -out "$D/tls.crt" >/dev/null 2>&1
 "$S" issuer-keygen -out "$D/issuer.key" > "$D/issuer.pub"
 printf '%s\n' 'm3-test-strong-local-password' > "$D/password"
@@ -120,13 +120,18 @@ for i in a b; do
  var="p$i"; nsenter -t "${!var}" -n "$A" managed-enroll -server https://192.0.2.1:18443 -ca "$D/tls.crt" -invite-file "$D/$i.invite" -name "$i" -state-dir "$D/$i"
 done
 mkdir -m 700 "$D/c-root"
-nsenter -t "$pc" -n "$M" enroll -server https://192.0.2.1:18443 -ca "$D/tls.crt" -invite-file "$D/c.invite" -name c -root "$D/c-root"
+if [[ "$DIRECT_TEST" == flow ]];then
+ mkdir -m 700 "$D/c-enroll"
+ nsenter -t "$pc" -n "$M" enroll -server https://192.0.2.1:18443 -ca "$D/tls.crt" -invite-file "$D/c.invite" -name c -root "$D/c-enroll" -restore-root "$D/c-root"
+else
+ nsenter -t "$pc" -n "$M" enroll -server https://192.0.2.1:18443 -ca "$D/tls.crt" -invite-file "$D/c.invite" -name c -root "$D/c-root"
+fi
 if nsenter -t "$pa" -n "$A" managed-enroll -server https://192.0.2.1:18443 -ca "$D/tls.crt" -invite-file "$D/a.invite" -name reused -state-dir "$D/reused" >"$D/reused.log" 2>&1; then echo "FAIL: invite reused";exit 1;fi
 echo "PASS: consumed invite rejected"
 for i in a b; do
  var="p$i";nsenter -t "${!var}" -n "$A" managed-run -state-dir "$D/$i" -ice-interfaces "n$i" >"$D/$i.log" 2>&1 & p=$!;pids+=("$p");printf -v "agent$i" '%s' "$p"
 done
-nsenter -t "$pc" -n "$M" run -root "$D/c-root" -deny-protect >"$D/deny.log" 2>&1 & deny=$!;pids+=("$deny")
+nsenter -t "$pc" -n "$M" run -root "$D/c-root" "${mobile_flags[@]}" -deny-protect >"$D/deny.log" 2>&1 & deny=$!;pids+=("$deny")
 sleep 3
 if nsenter -t "$pc" -n ip link show nxmobile0 >/dev/null 2>&1;then echo "FAIL: rejected socket protection established a VPN";exit 1;fi
 kill "$deny";wait "$deny"
@@ -227,4 +232,4 @@ wait "$agentc"||true
 if nsenter -t "$pc" -n ip link show nxmobile0 >/dev/null 2>&1;then echo "FAIL: revoked mobile interface leaked";exit 1;fi
 waitping "$pa" "$ipb" 25
 echo "PASS: management revocation removes native VPN without affecting other peers"
-echo "M8 mobile shared core integration PASS"
+echo "M8 mobile shared core integration PASS ($DIRECT_TEST)"

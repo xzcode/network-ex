@@ -13,6 +13,8 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -79,6 +81,92 @@ func (f *fixture) OpenTunnel(raw string) int32 {
 	f.opened.Add(1)
 	return int32(fd)
 }
+
+// Simulates the native packetFlow API using an independent Linux kernel TUN.
+// The Go core sees only packets, never the file descriptor.
+type flowFixture struct {
+	fixture
+	mu         sync.Mutex
+	session    *mobile.FlowSession
+	f          *os.File
+	generation int32
+	done       chan struct{}
+}
+
+func (p *flowFixture) BindSocket(fd int32) bool { return p.ProtectSocket(fd) }
+func (p *flowFixture) ApplyTunnel(spec string, g int32) bool {
+	var v struct {
+		RemoteAddress string `json:"remote_address"`
+	}
+	if json.Unmarshal([]byte(spec), &v) != nil || v.RemoteAddress != "192.0.2.1" {
+		fmt.Fprintln(os.Stderr, "flow fixture rejected remote address", v.RemoteAddress)
+		return false
+	}
+	fd := p.OpenTunnel(spec)
+	if fd < 0 {
+		return false
+	}
+	file := os.NewFile(uintptr(fd), "native-flow-fixture")
+	if file == nil {
+		unix.Close(int(fd))
+		return false
+	}
+	p.mu.Lock()
+	if p.f != nil {
+		p.mu.Unlock()
+		file.Close()
+		return false
+	}
+	p.f = file
+	p.generation = g
+	done := make(chan struct{})
+	p.done = done
+	p.mu.Unlock()
+	go func() {
+		defer close(done)
+		buf := make([]byte, 2048)
+		for {
+			n, e := file.Read(buf)
+			if e != nil {
+				return
+			}
+			if n > 0 {
+				p.session.PushPacket(buf[:n], g)
+			}
+		}
+	}()
+	return true
+}
+func (p *flowFixture) WritePacket(packet []byte, g int32) bool {
+	p.mu.Lock()
+	file := p.f
+	ok := p.generation == g
+	p.mu.Unlock()
+	if file == nil || !ok {
+		return false
+	}
+	n, e := file.Write(packet)
+	return e == nil && n == len(packet)
+}
+func (p *flowFixture) CloseTunnel(g int32) {
+	p.mu.Lock()
+	if p.generation != g || p.f == nil {
+		p.mu.Unlock()
+		return
+	}
+	f, done := p.f, p.done
+	p.f = nil
+	p.mu.Unlock()
+	f.Close()
+	<-done
+}
+
+type sessionAPI interface {
+	Stop()
+	WaitStopped(int32) bool
+	Status() string
+}
+
 func main() {
 	if e := run(); e != nil {
 		fmt.Fprintln(os.Stderr, e)
@@ -97,6 +185,8 @@ func run() error {
 	ca := f.String("ca", "", "test CA")
 	deny := f.Bool("deny-protect", false, "negative test")
 	direct := f.Bool("direct", false, "enable protected ICE")
+	flow := f.Bool("flow", false, "native packet flow fixture")
+	restore := f.String("restore-root", "", "second private directory for Keychain bundle round trip")
 	if e := f.Parse(os.Args[2:]); e != nil {
 		return e
 	}
@@ -119,12 +209,41 @@ func run() error {
 			return e
 		}
 		fmt.Println(d)
+		if *restore != "" {
+			raw, e := mobile.ExportProfile(*root)
+			if e != nil {
+				return e
+			}
+			if e = mobile.ImportProfile(*restore, raw); e != nil {
+				return e
+			}
+			if e = mobile.Forget(*root); e != nil {
+				return e
+			}
+			if _, e = os.Stat(filepath.Join(*root, "device")); !os.IsNotExist(e) {
+				return errors.New("staging device not removed")
+			}
+			fmt.Println("PASS: credential bundle restored into independent private root")
+		}
 		return nil
 	case "run":
 		p := &fixture{allow: !*deny}
-		s := mobile.NewSession(p)
-		if e := s.StartWithDirect(*root, *direct); e != nil {
-			return e
+		var s sessionAPI
+		if *flow {
+			ff := &flowFixture{fixture: fixture{allow: !*deny}}
+			p = &ff.fixture
+			fs := mobile.NewFlowSession(ff)
+			ff.session = fs
+			if e := fs.Start(*root); e != nil {
+				return e
+			}
+			s = fs
+		} else {
+			fs := mobile.NewSession(p)
+			if e := fs.StartWithDirect(*root, *direct); e != nil {
+				return e
+			}
+			s = fs
 		}
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 		defer cancel()

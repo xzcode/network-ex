@@ -39,6 +39,7 @@ func Install(ctx context.Context, iface, controlHost string, raw []string) (func
 		return nil, errors.New("cannot verify management address before exit protection")
 	}
 	for _, ip := range ips {
+		ip = ip.Unmap()
 		for _, p := range targets {
 			if p.Contains(ip) {
 				return nil, errors.New("exit target overlaps management endpoint")

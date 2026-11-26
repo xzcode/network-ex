@@ -30,9 +30,10 @@ type Platform interface {
 	ProtectSocket(fd int32) bool
 }
 type tunnelSpec struct {
-	Address string   `json:"address"`
-	MTU     int      `json:"mtu"`
-	Routes  []string `json:"routes"`
+	RemoteAddress string   `json:"remote_address,omitempty"`
+	Address       string   `json:"address"`
+	MTU           int      `json:"mtu"`
+	Routes        []string `json:"routes"`
 }
 type Session struct {
 	mu       sync.Mutex
@@ -43,7 +44,7 @@ type Session struct {
 	err      string
 }
 
-func Version() string                { return "0.8.1-dev-m8" }
+func Version() string                { return "0.8.2-dev-m8" }
 func NewSession(p Platform) *Session { return &Session{platform: p} }
 func checkedRoot(root string) (string, error) {
 	p, e := filepath.Abs(root)
@@ -124,39 +125,9 @@ func (s *Session) Start(root string) error { return s.StartWithDirect(root, fals
 // StartWithDirect explicitly opts into protected UDP ICE with WSS fallback.
 // Mobile platform permission and native-network changes still need real-device validation.
 func (s *Session) StartWithDirect(root string, direct bool) error {
-	root, e := checkedRoot(root)
-	if e != nil {
-		return e
-	}
 	if s.platform == nil {
 		return errors.New("VPN platform required")
 	}
-	unlock, e := lockRoot(root)
-	if e != nil {
-		return e
-	}
-	transferred := false
-	defer func() {
-		if !transferred {
-			unlock()
-		}
-	}()
-	dir := filepath.Join(root, "device")
-	if _, e = managed.Load(dir); e != nil {
-		return e
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.done != nil {
-		return errors.New("session already running")
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	_ = os.Remove(filepath.Join(dir, "tunnel.json"))
-	s.dir = dir
-	s.cancel = cancel
-	s.done = done
-	s.err = ""
 	// Native OpenTunnel may call into platform APIs; never hold session mutex
 	// while invoking it or when waiting for a session to finish.
 	ext := &tunnel.External{AllowICE: direct,
@@ -185,6 +156,40 @@ func (s *Session) StartWithDirect(root string, direct bool) error {
 			return d, nil
 		},
 	}
+	return s.startExternal(root, ext)
+}
+
+func (s *Session) startExternal(root string, ext *tunnel.External) error {
+	root, e := checkedRoot(root)
+	if e != nil {
+		return e
+	}
+	unlock, e := lockRoot(root)
+	if e != nil {
+		return e
+	}
+	transferred := false
+	defer func() {
+		if !transferred {
+			unlock()
+		}
+	}()
+	dir := filepath.Join(root, "device")
+	if _, e = managed.Load(dir); e != nil {
+		return e
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.done != nil {
+		return errors.New("session already running")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	_ = os.Remove(filepath.Join(dir, "tunnel.json"))
+	s.dir = dir
+	s.cancel = cancel
+	s.done = done
+	s.err = ""
 	transferred = true
 	go func() {
 		err := managed.Run(ctx, managed.Options{Dir: dir, Interface: "mobile0", Port: 51820, External: ext})

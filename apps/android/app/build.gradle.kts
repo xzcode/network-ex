@@ -8,8 +8,8 @@ android {
   applicationId = "com.xzcode.networkex"
   minSdk = 26
   targetSdk = 35
-  versionCode = 801
-  versionName = "0.8.1-dev-m8"
+  versionCode = 802
+  versionName = "0.8.2-dev-m8"
  }
  compileOptions {
   sourceCompatibility = JavaVersion.VERSION_17

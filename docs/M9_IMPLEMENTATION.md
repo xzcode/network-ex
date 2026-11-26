@@ -14,3 +14,15 @@ scripts/m9-package-smoke.sh exited 0 after fixing the test launcher to inspect t
 
 ## Security and release gate
 An actual govulncheck v1.1.4 source scan of the 0.8.2 baseline on Linux returned exit3: 40 reachable findings from 3 modules plus standard library, 9 additional findings in imported packages, 48 further module-level findings. Full report on Tokyo at /app/agent/network-ex-m8b-20261126/artifacts/m9/govulncheck.txt. Relevant categories include outdated net/http, TLS/x509, x/net HTTP/2, Gorilla WebSocket and Pion DTLS v2. These are scanner findings, not verified exploits or complete security assurance. Go 1.26.11 archive downloaded from official Go release metadata and checksum verified; candidate dependency upgrade in separate src-m9-security worktree uses x/net v0.60.0 and patched Gorilla pseudo-version; dependent x/crypto and x/sys upgraded. Do not merge until compatibility, new scanner and multi-platform/native mobile validation. DTLS v2 still needs separate migration/review (scanner reports no fix in v2). No project license selected; owner decision required before declaring open source. No production deployment, public binary distribution or Release in this batch. Keep existing Android 0.8.2 verified development build, prior M4–M8 runtime/HA/full-exit/game gates, and Apple signing requirements explicit.
+
+## Hosted native build results (M9b)
+All four jobs in [desktop run 45791414659](https://github.com/xzcode/network-ex/actions/runs/45791414659), head 8217de6, finished successfully. Artifacts (outer ZIP sizes/digests are GitHub-reported, not local extraction tests):
+
+| Artifact | ID | Bytes | Format |
+|---|---:|---:|---|
+| network-ex-desktop-windows-x64 | 15102937621 | 15410987 | NSIS + matching Agent |
+| network-ex-desktop-linux-x64 | 15103511235 | 17122460 | DEB + matching Agent |
+| network-ex-desktop-macos-x64 | 15104035592 | 16984634 | DMG + matching Agent |
+| network-ex-desktop-macos-arm64 | 15103876491 | 16056910 | DMG + matching Agent |
+
+The corrected [iOS run 45791669859](https://github.com/xzcode/network-ex/actions/runs/45791669859), head 5c60bd9, succeeded on macos-15-intel using Xcode 16.4 (iPhoneOS18.5 SDK). Logs show BUILD SUCCEEDED and file reports Mach-O 64-bit executable arm64 for both NetworkEX and embedded PacketTunnel.appex. Artifact network-ex-ios-unsigned ID 15102304409, 7177561 bytes. Not a signed IPA. Host app and extension native compile verified, no Apple provisioning or device runtime verified. Desktop 0.9.0 GUI packaging still uses 0.8.2-dev-m8 Go Agent and the known vulnerable dependency baseline; do not deploy these artifacts to production. The prior native-build blockers are cleared, but installation/runtime and security gates are not. Artifacts have seven-day retention; no Release created.

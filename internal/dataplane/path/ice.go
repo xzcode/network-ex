@@ -221,6 +221,22 @@ func (p *ICE) session(parent context.Context, deliver func([]byte)) (err error) 
 			return e
 		}
 		cfg.Urls = []*stun.URI{u}
+		// Pion gathers one independent socket per configured STUN URI
+		// and local address. For a single eligible underlay, use a small
+		// bounded set of independent reflexive candidates. This lets
+		// authenticated ICE choose among real NAT mappings rather than
+		// guessing ports or relaxing the candidate/source checks.
+		if candidate, ok := p.singleIPv4Underlay(); ok {
+			second, third := *u, *u
+			cfg.Urls = append(cfg.Urls, &second, &third)
+			// Freeze the eligible interface/address for this generation.
+			// If the interface changes, the next ICE attempt re-enumerates.
+			cfg.InterfaceFilter = func(name string) bool { return name == candidate.name && p.allowedInterface(name) }
+			cfg.IPFilter = func(ip net.IP) bool {
+				a, ok := netip.AddrFromSlice(ip)
+				return ok && a.Unmap() == candidate.addr && p.allowedIP(ip)
+			}
+		}
 	}
 	if p.Relay.Protect != nil {
 		n, e := protect.NewICENet(p.Relay.Protect)

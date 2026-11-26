@@ -1,8 +1,14 @@
 name: iOS unsigned build
 on:
   workflow_dispatch:
+  push:
+    branches: [master]
+    paths: ['.github/workflows/ios-build.yml']
 permissions:
   contents: read
+concurrency:
+  group: ios-compile-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   compile:
     runs-on: macos-15
@@ -12,7 +18,28 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23.12'
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Toolchain
+        run: |
+          uname -m
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          go version
+          brew install xcodegen
       - name: Compile app and extension without signing
         run: bash scripts/build-ios.sh compile
+      - name: Verify unsigned app and extension
+        run: |
+          set -euo pipefail
+          app=apps/ios/build/device/Build/Products/Debug-iphoneos/NetworkEX.app
+          test -f "$app/NetworkEX"
+          test -d "$app/PlugIns/PacketTunnel.appex"
+          file "$app/NetworkEX" "$app/PlugIns/PacketTunnel.appex/PacketTunnel"
+          mkdir -p artifacts
+          ditto -c -k --sequesterRsrc --keepParent "$app" artifacts/Network-EX-iOS-unsigned.zip
+          (cd artifacts && shasum -a 256 *.zip > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: network-ex-ios-unsigned
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 7

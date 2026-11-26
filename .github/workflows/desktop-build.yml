@@ -1,0 +1,80 @@
+name: Desktop native development builds
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths: ['.github/workflows/desktop-build.yml']
+permissions:
+  contents: read
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+            label: macos-arm64
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            bundles: app,dmg
+            label: macos-x64
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+            label: windows-x64
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            bundles: deb
+            label: linux-x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev patchelf build-essential pkg-config
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup target add "${{ matrix.target }}"
+          rustc --version
+          cargo --version
+      - name: Build Agent sidecar
+        run: node scripts/build-desktop-sidecar.mjs ${{ matrix.target }}
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+      - name: Compile and package desktop
+        working-directory: apps/desktop
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = macOS ]; then export APPLE_SIGNING_IDENTITY="-"; fi
+          npm run tauri -- build --target "${{ matrix.target }}" --bundles "${{ matrix.bundles }}"
+      - name: Collect development artifacts
+        shell: bash
+        run: |
+          python scripts/collect-desktop-artifacts.py "${{ matrix.target }}" "${{ matrix.label }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: network-ex-desktop-${{ matrix.label }}
+          path: artifacts/desktop-${{ matrix.label }}/
+          if-no-files-found: error
+          retention-days: 7

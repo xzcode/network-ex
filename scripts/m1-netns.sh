@@ -42,7 +42,7 @@ def peer(n, mode):
 for n,peers in {"a":[peer("b","direct"),peer("c","relay")],"b":[peer("a","direct")],"c":[peer("a","relay")]}.items():
     (d/(n+".json")).write_text(json.dumps(dict(interface="nex0",ip="10.88.0."+str("abc".index(n)+2),listen_port=51820,wg_key_file=str(d/(n+".wg")),identity_key_file=str(d/(n+".id")),status_file=str(d/(n+".status")),peers=peers)))
 PY
-"$S" -mode relay -listen 192.0.2.1:18443 -node test-relay -issuer-public "$D/issuer.pub" -tls-cert "$D/tls.crt" -tls-key "$D/tls.key" >"$D/relay.log" 2>&1 & pids+=("$!")
+"$S" -mode relay -listen 192.0.2.1:18443 -node test-relay -issuer-public "$D/issuer.pub" -tls-cert "$D/tls.crt" -tls-key "$D/tls.key" >"$D/relay.log" 2>&1 & relaypid=$!; pids+=("$relaypid")
 for i in a b c; do
  "$A" check -config "$D/$i.json"
  var="p$i"; nsenter -t "${!var}" -n "$A" run -config "$D/$i.json" >"$D/$i.log" 2>&1 & p=$!; pids+=("$p"); printf -v "agent$i" '%s' "$p"
@@ -92,8 +92,10 @@ marker=b"NETWORK_EX_M1_PAYLOAD_TEST_8a2d"
 for ip,mode in [("10.88.0.3","direct"),("10.88.0.4","relay")]:
     for t,port in [(socket.SOCK_STREAM,19002),(socket.SOCK_DGRAM,19001)]:
         with socket.socket(socket.AF_INET,t) as s:
-            s.settimeout(4);s.connect((ip,port));s.sendall(marker);assert s.recv(4096)==marker
-    print("PASS:",mode,"TCP and UDP echo")
+            s.settimeout(4);s.connect((ip,port));payload=marker+b"x"*(1200-len(marker));s.sendall(payload);result=s.recv(4096);
+            while t==socket.SOCK_STREAM and len(result)<len(payload): result+=s.recv(4096)
+            assert result==payload
+    print("PASS:",mode,"TCP and UDP 1200-byte echo")
 PY
 wait "$cap"; cat "$D/capture.log"
 sleep 1
@@ -105,6 +107,28 @@ assert len(p)==2 and all(int(x["handshake_unix"])>0 and int(x["rx_bytes"])>0 and
 assert p[0]["mode"]=="direct-configured" and p[1]["mode"]=="relay-configured" and p[1]["relay_connected"]
 print("PASS: real WireGuard handshakes and traffic counters on both paths")
 PY
+# Restart relay; existing lease remains valid and the same virtual peer must recover.
+kill "$relaypid"; wait "$relaypid"
+"$S" -mode relay -listen 192.0.2.1:18443 -node test-relay -issuer-public "$D/issuer.pub" -tls-cert "$D/tls.crt" -tls-key "$D/tls.key" >"$D/relay.log" 2>&1 & relaypid=$!; pids+=("$relaypid")
+for i in {1..20}; do
+ if nsenter -t "$pa" -n ping -c1 -W1 10.88.0.4 >/dev/null 2>&1; then break; fi
+ if [[ $i == 20 ]]; then dump; exit 1; fi
+ sleep 1
+done
+echo "PASS: relay restart recovered same virtual IP"
+# Replace the configured B key with a different identity; A still knows only the original B WG key.
+kill "$agentb"; wait "$agentb"
+"$A" keygen -out "$D/rogue.wg" > /dev/null
+python3 - "$D" <<'PY2'
+import json,pathlib,sys
+d=pathlib.Path(sys.argv[1]);p=d/"b.json";c=json.loads(p.read_text());c["wg_key_file"]=str(d/"rogue.wg");p.write_text(json.dumps(c))
+PY2
+nsenter -t "$pb" -n "$A" run -config "$D/b.json" >"$D/b.log" 2>&1 & rogue=$!; pids+=("$rogue")
+sleep 2
+kill -0 "$rogue"
+if nsenter -t "$pb" -n ping -c3 -W1 10.88.0.2 >/dev/null 2>&1; then echo "FAIL: unauthorized WireGuard key accepted"; exit 1; fi
+echo "PASS: unauthorized WireGuard peer key rejected"
+kill "$rogue"; wait "$rogue"
 kill "$agenta"; wait "$agenta"
 if nsenter -t "$pa" -n ip link show nex0 >/dev/null 2>&1; then echo "FAIL: TUN not removed"; exit 1; fi
 test -z "$(nsenter -t "$pa" -n ip -4 route show exact 10.88.0.3/32)"

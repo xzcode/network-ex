@@ -48,12 +48,13 @@ network-ex-agent status -file a.status
 环境：首尔 Linux OpenCloudOS 9.6，Go 1.23.12 amd64，三个互相隔离的 Linux netns，通过隔离 bridge 192.0.2.0/24 作为 underlay。独立中继进程 192.0.2.1:18443。未开放宿主机公网监听。A=10.88.0.2，B=10.88.0.3，C=10.88.0.4。
 - 两个 CLI 构建成功，版本 0.1.0-dev-m1。
 - A -> B direct ICMP，A -> C relay ICMP 同时通过。
-- 两种路径 TCP echo 与 UDP echo 实测成功。
+- 两种路径 TCP echo 与 UDP echo 实测成功；第二轮均通过 1200 字节 payload（非完整 MTU 边界扫描）。
 - AF_PACKET underlay 抓包 56 帧，测试 marker 未出现（仅验证本次数据，不是完整密码学审计）。
 - A 两条路径均有真实 WG 握手时间及非零收发计数：B rx=1148/tx=1172，C rx=1204/tx=1148 bytes；C relay_connected=true。
 - SIGTERM 后 A 的 TUN 与 overlay /32 路由被清理。
+- 第二轮：底层 AF_PACKET 抓包 58 帧，明文 marker 未出现；B rx=3540/tx=3600，C rx=3484/tx=3540 bytes；中继进程重启后同一虚拟 IP 恢复通信；更换 B 的 WG 私钥并保留 A 原公钥配置，未经授权的 WG peer 无法 ping A。
 - TestSignedLeaseScope（过期/错误签名/过长 TTL 拒绝）和 TestRelayIdentityAndFlow（TLS WSS 真实转发、不同 network scope 隔离、错误身份签名拒绝）均通过。
-- 自动 NAT/ICE、跨真实公网 NAT、动态切换、实际高负载、MTU 边界与 endpoint roaming、恶意 WG peer、跨平台、完整路由冲突与长期重连压测：NOT RUN/待实现。M1 核心闭环通过，严格 M1 退出条件尚有这些补测项；不得当作生产版本。
+- 自动 NAT/ICE、跨真实公网 NAT、动态切换、实际高负载、完整 MTU 边界扫描、endpoint roaming、更多恶意 WG peer 场景、跨平台、完整路由冲突与长期重连压测：NOT RUN/待实现。M1 核心闭环通过，严格 M1 退出条件尚有这些补测项；不得当作生产版本。
 
 ## 已知限制与安全边界
 M1 静态逻辑 endpoint 使用虚拟 IP:1 对应实际传输路径，直接接收只接受已配置物理 endpoint；尚未支持漫游和双栈。WSS 目前用单条二进制消息承载一个密文包，连接绑定签名 lease，未实现 PROTOCOL 中独立 flow_id 二进制帧（M2/M3 协议冻结前统一）。短租约到期后 fail closed，CLI 需重新配置有效 token；不宣称无限在线。路由集成只拒绝已存在的精确 /32 route，完整重叠路由/多网络策略在后续补齐。管理/all mode 明确返回未实现而不是空服务。WSS/TCP 阻塞和吞吐需测；QUIC 延后。固定静态配置受本地管理员信任，不能公开提供开放中继。M2 前补强上述安全与传输边界。

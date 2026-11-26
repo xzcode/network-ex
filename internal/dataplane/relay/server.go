@@ -31,6 +31,7 @@ type registration struct {
 func (r *registration) close() { r.once.Do(func() { close(r.done); r.ws.Close() }) }
 
 type Server struct {
+	limiter   nodeLimiter
 	Authorize func(Lease) bool
 	Node      string
 	Issuer    ed25519.PublicKey
@@ -54,13 +55,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	select {
-	case s.slots <- struct{}{}:
-		defer func() { <-s.slots }()
-	default:
+	if !s.limiter.admit() {
 		http.Error(w, "capacity", 503)
 		return
 	}
+	defer s.limiter.release()
 	c, e := upgrader.Upgrade(w, r, nil)
 	if e != nil {
 		return
@@ -134,6 +133,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				if c.WriteMessage(websocket.BinaryMessage, b) != nil {
 					return
 				}
+				s.limiter.out.Add(uint64(len(b)))
 			}
 		}
 	}()
@@ -155,6 +155,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		used += len(b)
 		if used > maxRate {
 			return
+		}
+		s.limiter.in.Add(uint64(len(b)))
+		if !s.limiter.allow(len(b)) {
+			s.limiter.drop.Add(1)
+			continue
 		}
 		s.forward(reg, b)
 	}
@@ -194,11 +199,14 @@ func (s *Server) forward(r *registration, b []byte) {
 	p := m[peer]
 	s.mu.Unlock()
 	if p == nil {
+		s.limiter.drop.Add(1)
 		return
 	}
 	select {
 	case <-p.done:
+		s.limiter.drop.Add(1)
 	case p.queue <- b:
 	default:
+		s.limiter.drop.Add(1)
 	}
 }

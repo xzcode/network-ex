@@ -24,7 +24,7 @@ import (
 	"golang.org/x/crypto/curve25519"
 )
 
-const version = "0.4.0-dev-m4"
+const version = "0.5.0-dev-m5"
 
 func main() {
 	if e := run(os.Args[1:]); e != nil {

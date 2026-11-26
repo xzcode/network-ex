@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xzcode/network-ex/internal/dataplane/relay"
@@ -208,9 +209,9 @@ func Load(dir string) (State, error) {
 	}
 	return s, e
 }
-func (c *Client) Snapshot(ctx context.Context, s State, key ed25519.PrivateKey) (control.Snapshot, error) {
+func (c *Client) Snapshot(ctx context.Context, s State, key ed25519.PrivateKey, probes ...control.NodeProbe) (control.Snapshot, error) {
 	var snap control.Snapshot
-	req := control.DeviceRequest{ID: s.ID}
+	req := control.DeviceRequest{ID: s.ID, MultiRelay: true, Probes: probes}
 	if e := req.Sign(key); e != nil {
 		return snap, e
 	}
@@ -218,10 +219,54 @@ func (c *Client) Snapshot(ctx context.Context, s State, key ed25519.PrivateKey) 
 		return snap, e
 	}
 	now := time.Now().Unix()
-	if snap.Device.ID != s.ID || snap.Device.NetworkID != s.NetworkID || snap.ValidUntil <= now || snap.ValidUntil > now+30 || len(snap.Peers) > 64 {
+	if snap.Device.ID != s.ID || snap.Device.NetworkID != s.NetworkID || snap.ValidUntil <= now || snap.ValidUntil > now+30 || len(snap.Peers) > 64 || len(snap.Nodes) > 16 {
 		return snap, errors.New("invalid or expired management snapshot")
 	}
 	return snap, nil
+}
+
+// Probes are parallel, bounded, TLS-verified requests to advertised relay health endpoints.
+func (c *Client) Probe(ctx context.Context, nodes []control.RelayNode) []control.NodeProbe {
+	if len(nodes) > 16 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	out := make([]control.NodeProbe, len(nodes))
+	var wg sync.WaitGroup
+	for i, n := range nodes {
+		wg.Add(1)
+		go func(i int, n control.RelayNode) {
+			defer wg.Done()
+			p := control.NodeProbe{ID: n.ID}
+			defer func() { out[i] = p }()
+			u, e := url.Parse(n.RelayURL)
+			if e != nil || u.Scheme != "wss" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "/relay/v1" {
+				return
+			}
+			u.Scheme = "https"
+			u.Path = "/healthz"
+			u.RawPath = ""
+			r, e := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+			if e != nil {
+				return
+			}
+			start := time.Now()
+			resp, e := c.http.Do(r)
+			if e != nil {
+				return
+			}
+			defer resp.Body.Close()
+			_, e = io.Copy(io.Discard, io.LimitReader(resp.Body, 512))
+			p.Reachable = e == nil && resp.StatusCode == 200
+			p.RTTMillis = int(time.Since(start).Milliseconds())
+			if p.RTTMillis > 10000 {
+				p.RTTMillis = 10000
+			}
+		}(i, n)
+	}
+	wg.Wait()
+	return out
 }
 
 type Options struct {
@@ -230,9 +275,10 @@ type Options struct {
 	ICEInterfaces           []string
 }
 type PeerInfo struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	IP   string `json:"ip"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	IP        string `json:"ip"`
+	RelayNode string `json:"relay_node,omitempty"`
 }
 type LocalStatus struct {
 	State      string         `json:"state"`
@@ -295,6 +341,13 @@ func Run(ctx context.Context, o Options) error {
 	}
 	defer stopTunnel()
 	var last control.Snapshot
+	probeClient := c
+	if o.RelayCA != state.CA {
+		probeClient, e = NewClient(state.Server, o.RelayCA)
+		if e != nil {
+			return e
+		}
+	}
 	status := func(mode, err string) {
 		_ = writeJSON(filepath.Join(o.Dir, "managed.json"), LocalStatus{State: mode, Device: last.Device, Revision: last.Revision, ValidUntil: expiry, PeerCount: len(last.Peers), Peers: publicPeers(last.Peers), UpdatedAt: time.Now().UTC(), Error: err})
 	}
@@ -324,11 +377,12 @@ func Run(ctx context.Context, o Options) error {
 		if stop != nil && expiry > time.Now().Unix() {
 			reqCtx, cancel = context.WithDeadline(ctx, time.Unix(expiry, 0))
 		}
-		snap, err := c.Snapshot(reqCtx, state, ed25519.PrivateKey(key))
+		probes := probeClient.Probe(reqCtx, last.Nodes)
+		snap, err := c.Snapshot(reqCtx, state, ed25519.PrivateKey(key), probes...)
 		cancel()
 		if err != nil {
 			var he HTTPError
-			if errors.As(err, &he) && (he.Code == 401 || he.Code == 403 || he.Code == 404) {
+			if errors.As(err, &he) && (he.Code == 401 || he.Code == 403 || he.Code == 404 || he.Code == 426) {
 				stopTunnel()
 				expiry = 0
 				status("authorization-denied", err.Error())
@@ -367,7 +421,11 @@ func Run(ctx context.Context, o Options) error {
 						if e = os.WriteFile(tokenPath, []byte(p.Lease+"\n"), 0600); e != nil {
 							return e
 						}
-						cfg.Peers = append(cfg.Peers, tunnel.Peer{IP: p.IP, PublicKey: p.WGKey, RelayURL: snap.RelayURL, RelayTokenFile: tokenPath, RelayCA: o.RelayCA, ICE: true, STUNURL: snap.STUNURL, ICEInterfaces: o.ICEInterfaces})
+						relayURL, stunURL := p.RelayURL, p.STUNURL
+						if p.RelayNode == "" {
+							relayURL, stunURL = snap.RelayURL, snap.STUNURL
+						}
+						cfg.Peers = append(cfg.Peers, tunnel.Peer{IP: p.IP, PublicKey: p.WGKey, RelayURL: relayURL, RelayTokenFile: tokenPath, RelayCA: o.RelayCA, ICE: true, STUNURL: stunURL, ICEInterfaces: o.ICEInterfaces})
 					}
 					if e = tunnel.Check(cfg); e != nil {
 						status("config-error", e.Error())
@@ -407,7 +465,7 @@ func Run(ctx context.Context, o Options) error {
 func publicPeers(peers []control.Peer) []PeerInfo {
 	out := make([]PeerInfo, 0, len(peers))
 	for _, p := range peers {
-		out = append(out, PeerInfo{p.ID, p.Name, p.IP})
+		out = append(out, PeerInfo{p.ID, p.Name, p.IP, p.RelayNode})
 	}
 	return out
 }

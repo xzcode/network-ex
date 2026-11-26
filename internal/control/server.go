@@ -1,7 +1,6 @@
 package control
 
 import (
-	"context"
 	"crypto/ed25519"
 	"database/sql"
 	"embed"
@@ -9,7 +8,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -40,12 +38,8 @@ type Service struct {
 }
 
 func NewService(store *Store, issuer ed25519.PrivateKey, node, relayURL, stunURL string) (*Service, error) {
-	u, e := url.Parse(relayURL)
-	if store == nil || len(issuer) != ed25519.PrivateKeySize || node == "" || len(node) > 128 || e != nil || u.Scheme != "wss" || u.Hostname() == "" || u.Path != "/relay/v1" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return nil, errors.New("management requires node and advertised wss://host/relay/v1 URL")
-	}
-	if stunURL != "" && !strings.HasPrefix(stunURL, "stun:") {
-		return nil, errors.New("invalid advertised STUN URL")
+	if store == nil || len(issuer) != ed25519.PrivateKeySize || node == "" || len(node) > 128 || (relayURL != "" && !validRelayURL(relayURL)) || !validSTUN(stunURL) {
+		return nil, errors.New("invalid management node or relay/STUN URL")
 	}
 	return &Service{Store: store, Issuer: issuer, Node: node, RelayURL: relayURL, STUNURL: stunURL, loginSlots: make(chan struct{}, 2)}, nil
 }
@@ -99,6 +93,12 @@ func (s *Service) Handler() http.Handler {
 	route("GET /api/v1/audit", s.auditList)
 	route("POST /api/v1/devices/enroll", s.enroll)
 	route("POST /api/v1/devices/snapshot", s.snapshot)
+	route("GET /api/v1/relay/nodes", s.listNodes)
+	route("POST /api/v1/relay/nodes", s.createNode)
+	route("PUT /api/v1/relay/nodes/{id}/state", s.nodeState)
+	route("PUT /api/v1/relay/nodes/{id}/limits", s.nodeLimits)
+	route("POST /api/v1/relay/node", s.nodeRequest)
+
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		if path == "/" {
@@ -571,6 +571,9 @@ func (s *Service) changeDevice(w http.ResponseWriter, r *http.Request, approve b
 				return e
 			}
 		}
+		if _, e = tx.Exec("DELETE FROM pair_relays WHERE network_id=? AND (a IN (SELECT id FROM devices WHERE network_id=? AND status<>'approved') OR b IN (SELECT id FROM devices WHERE network_id=? AND status<>'approved'))", nid, nid, nid); e != nil {
+			return e
+		}
 		if _, e = tx.Exec("UPDATE networks SET revision=revision+1 WHERE id=?", nid); e != nil {
 			return e
 		}
@@ -598,6 +601,9 @@ func (s *Service) policy(w http.ResponseWriter, r *http.Request) error {
 	id := r.PathValue("id")
 	e = withTx(r.Context(), s.Store, func(tx *sql.Tx) error {
 		if _, e := network(tx, id, u); e != nil {
+			return e
+		}
+		if _, e := tx.Exec("DELETE FROM pair_relays WHERE network_id=?", id); e != nil {
 			return e
 		}
 		if _, e := tx.Exec("UPDATE networks SET policy=?,revision=revision+1 WHERE id=?", v.Policy, id); e != nil {
@@ -669,6 +675,11 @@ func (s *Service) setRule(w http.ResponseWriter, r *http.Request) error {
 		}
 		if _, e := tx.Exec("INSERT INTO pair_rules VALUES(?,?,?,?) ON CONFLICT(network_id,a,b) DO UPDATE SET allow=excluded.allow", nid, v.A, v.B, v.Allow); e != nil {
 			return e
+		}
+		if !v.Allow {
+			if _, e := tx.Exec("DELETE FROM pair_relays WHERE network_id=? AND a=? AND b=?", nid, v.A, v.B); e != nil {
+				return e
+			}
 		}
 		if _, e := tx.Exec("UPDATE networks SET revision=revision+1 WHERE id=?", nid); e != nil {
 			return e
@@ -752,6 +763,21 @@ func (s *Service) snapshot(w http.ResponseWriter, r *http.Request) error {
 		if d.Status != "approved" {
 			return nil
 		}
+		if e = s.recordProbes(tx, d, v.Probes); e != nil {
+			return e
+		}
+		nodes, e := s.eligible(tx, d.NetworkID)
+		if e != nil {
+			return e
+		}
+		if len(nodes) > 0 && !v.MultiRelay {
+			return failure(426, "registered relay nodes require M5 agent")
+		}
+		if v.MultiRelay {
+			for _, n := range nodes {
+				out.Nodes = append(out.Nodes, n.RelayNode)
+			}
+		}
 		out.RelayURL = s.RelayURL
 		out.STUNURL = s.STUNURL
 		rows, e := tx.Query("SELECT id,name,ip,wg_key,identity FROM devices WHERE network_id=? AND status='approved' AND id<>? ORDER BY id", d.NetworkID, d.ID)
@@ -795,10 +821,20 @@ func (s *Service) snapshot(w http.ResponseWriter, r *http.Request) error {
 			if !allow {
 				continue
 			}
+			selected, e := s.chooseNode(tx, d.NetworkID, a, b, nodes)
+			if e != nil {
+				return e
+			}
+			if selected.ID == "" {
+				continue
+			}
+			c.peer.RelayNode = selected.ID
+			c.peer.RelayURL = selected.RelayURL
+			c.peer.STUNURL = selected.STUNURL
 			ids := []string{identity, c.identity}
 			sort.Strings(ids)
 			flow := digest(d.NetworkID + ":" + a + ":" + b + ":" + intString(rev) + ":" + intString(epoch))
-			c.peer.Lease, e = relay.Issue(s.Issuer, relay.Lease{Node: s.Node, Network: d.NetworkID, Flow: flow, A: ids[0], B: ids[1], Expires: expires})
+			c.peer.Lease, e = relay.Issue(s.Issuer, relay.Lease{Node: selected.ID, Network: d.NetworkID, Flow: flow, A: ids[0], B: ids[1], Expires: expires})
 			if e != nil {
 				return e
 			}
@@ -813,46 +849,5 @@ func (s *Service) snapshot(w http.ResponseWriter, r *http.Request) error {
 }
 func intString(i int64) string { b, _ := json.Marshal(i); return string(b) }
 
-// AuthorizeLease checks current membership, pair policy and configuration revision
-// in all-in-one mode; separately deployed relays enforce signed expiry.
-func (s *Service) AuthorizeLease(l relay.Lease) bool {
-	if l.Node != s.Node || l.Valid(time.Now()) != nil {
-		return false
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	allowed := false
-	e := withTx(ctx, s.Store, func(tx *sql.Tx) error {
-		var a, b string
-		var rev int64
-		var policy string
-		if e := tx.QueryRow("SELECT id FROM devices WHERE network_id=? AND identity=? AND status='approved'", l.Network, l.A).Scan(&a); e != nil {
-			return e
-		}
-		if e := tx.QueryRow("SELECT id FROM devices WHERE network_id=? AND identity=? AND status='approved'", l.Network, l.B).Scan(&b); e != nil {
-			return e
-		}
-		if e := tx.QueryRow("SELECT revision,policy FROM networks WHERE id=?", l.Network).Scan(&rev, &policy); e != nil {
-			return e
-		}
-		if a > b {
-			a, b = b, a
-		}
-		epoch := (l.Expires-30)/120 - 1
-		if (epoch+1)*120+30 != l.Expires || l.Flow != digest(l.Network+":"+a+":"+b+":"+intString(rev)+":"+intString(epoch)) {
-			return nil
-		}
-		allowed = policy == "allow_members"
-		var override bool
-		e := tx.QueryRow("SELECT allow FROM pair_rules WHERE network_id=? AND a=? AND b=?", l.Network, a, b).Scan(&override)
-		if e == nil {
-			allowed = override
-			return nil
-		}
-		if errors.Is(e, sql.ErrNoRows) {
-			return nil
-		}
-		return e
-	})
-	return e == nil && allowed
-}
+// AuthorizeLease checks current membership, policy and shared pair assignment.
+func (s *Service) AuthorizeLease(l relay.Lease) bool { return s.authorizeCurrent(l) }

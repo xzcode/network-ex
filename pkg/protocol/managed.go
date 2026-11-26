@@ -47,10 +47,12 @@ func (v Enrollment) Verify() bool {
 }
 
 type DeviceRequest struct {
-	ID        string `json:"id"`
-	Nonce     string `json:"nonce"`
-	Timestamp int64  `json:"timestamp"`
-	Signature string `json:"signature"`
+	MultiRelay bool        `json:"multi_relay,omitempty"`
+	Probes     []NodeProbe `json:"probes,omitempty"`
+	ID         string      `json:"id"`
+	Nonce      string      `json:"nonce"`
+	Timestamp  int64       `json:"timestamp"`
+	Signature  string      `json:"signature"`
 }
 
 func (v DeviceRequest) message() []byte {
@@ -102,19 +104,23 @@ type Rule struct {
 	Allow bool   `json:"allow"`
 }
 type Peer struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	IP    string `json:"ip"`
-	WGKey string `json:"wg_key"`
-	Lease string `json:"lease"`
+	RelayNode string `json:"relay_node,omitempty"`
+	RelayURL  string `json:"relay_url,omitempty"`
+	STUNURL   string `json:"stun_url,omitempty"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	IP        string `json:"ip"`
+	WGKey     string `json:"wg_key"`
+	Lease     string `json:"lease"`
 }
 type Snapshot struct {
-	Device     Device `json:"device"`
-	Revision   int64  `json:"revision"`
-	ValidUntil int64  `json:"valid_until"`
-	RelayURL   string `json:"relay_url"`
-	STUNURL    string `json:"stun_url"`
-	Peers      []Peer `json:"peers"`
+	Nodes      []RelayNode `json:"nodes,omitempty"`
+	Device     Device      `json:"device"`
+	Revision   int64       `json:"revision"`
+	ValidUntil int64       `json:"valid_until"`
+	RelayURL   string      `json:"relay_url"`
+	STUNURL    string      `json:"stun_url"`
+	Peers      []Peer      `json:"peers"`
 }
 
 func now() int64 { return time.Now().Unix() }

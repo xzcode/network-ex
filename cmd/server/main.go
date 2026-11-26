@@ -9,10 +9,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/xzcode/network-ex/internal/node/registration"
+	"github.com/xzcode/network-ex/internal/platform/localfile"
+	"github.com/xzcode/network-ex/pkg/protocol"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,7 +25,7 @@ import (
 	stunserver "github.com/xzcode/network-ex/internal/node/stun"
 )
 
-const version = "0.4.0-dev-m4"
+const version = "0.5.0-dev-m5"
 
 func main() {
 	if e := run(os.Args[1:]); e != nil {
@@ -57,7 +61,7 @@ func run(args []string) error {
 			}
 			fmt.Println("administrator initialized")
 			return nil
-		case "issuer-keygen":
+		case "issuer-keygen", "node-keygen":
 			f := flag.NewFlagSet("issuer-keygen", flag.ContinueOnError)
 			out := f.String("out", "", "private key path")
 			if e := f.Parse(args[1:]); e != nil {
@@ -120,6 +124,11 @@ func run(args []string) error {
 	issuer := f.String("issuer-public", "", "issuer public hex file")
 	cert := f.String("tls-cert", "", "TLS cert")
 	key := f.String("tls-key", "", "TLS key")
+	mgmtURL := f.String("management-url", "", "HTTPS management origin for a registered relay")
+	mgmtCA := f.String("management-ca", "", "management CA PEM")
+	nodeKey := f.String("node-key", "", "relay node identity private key")
+	nodeInvite := f.String("node-invite-file", "", "0600 one-time node invitation file")
+
 	if e := f.Parse(args); e != nil {
 		return e
 	}
@@ -132,6 +141,17 @@ func run(args []string) error {
 	if *mode == "management" && *stunListen != "" {
 		return errors.New("management-only mode cannot listen for STUN")
 	}
+	if *mode == "all" && *relayURL == "" {
+		return errors.New("all mode requires advertised relay URL")
+	}
+	if *mode != "relay" && (*mgmtURL != "" || *nodeKey != "" || *nodeInvite != "" || *mgmtCA != "") {
+		return errors.New("node registration flags require relay mode")
+	}
+	if *mgmtURL == "" && (*nodeKey != "" || *nodeInvite != "" || *mgmtCA != "") {
+		return errors.New("management-url required for registered relay")
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	var pub ed25519.PublicKey
 	var management *control.Service
 	mux := http.NewServeMux()
@@ -161,6 +181,37 @@ func run(args []string) error {
 	}
 	if *mode != "management" {
 		rs, ss := relay.NewServer(*node, pub), relay.NewSignalServer(*node, pub)
+		if *mgmtURL != "" {
+			k, e := relay.ReadHex(*nodeKey, ed25519.PrivateKeySize, true)
+			if e != nil {
+				return e
+			}
+			client, e := registration.New(ctx, *node, *mgmtURL, *mgmtCA, ed25519.PrivateKey(k))
+			if e != nil {
+				return e
+			}
+			reply, e := client.Heartbeat(protocol.NodeStats{})
+			if e != nil && *nodeInvite != "" {
+				if e = localfile.Check(*nodeInvite, false, 512); e != nil {
+					return e
+				}
+				b, e := os.ReadFile(*nodeInvite)
+				if e != nil {
+					return e
+				}
+				if _, e = client.Enroll(strings.TrimSpace(string(b))); e != nil {
+					return e
+				}
+				reply, e = client.Heartbeat(protocol.NodeStats{})
+			}
+			if e != nil {
+				return e
+			}
+			rs.SetLimits(reply.Limits)
+			rs.Authorize = client.Authorize
+			ss.Authorize = client.Authorize
+			go client.Run(rs)
+		}
 		if management != nil {
 			rs.Authorize = management.AuthorizeLease
 			ss.Authorize = management.AuthorizeLease
@@ -172,8 +223,6 @@ func run(args []string) error {
 		}
 	}
 	srv := &http.Server{Addr: *listen, Handler: mux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 * 1024, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	if *stunListen != "" {
 		addr, e := net.ResolveUDPAddr("udp4", *stunListen)
 		if e != nil {

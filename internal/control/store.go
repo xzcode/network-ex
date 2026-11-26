@@ -84,9 +84,22 @@ func Open(path string) (*Store, error) {
 		if e = tx.Commit(); e != nil {
 			return fail(e)
 		}
-	case 1:
+	case 1, 2:
 	default:
 		return fail(fmt.Errorf("unsupported database schema %d", v))
+	}
+	if v < 2 {
+		tx, e := db.Begin()
+		if e != nil {
+			return fail(e)
+		}
+		if _, e = tx.Exec(schemaV2); e != nil {
+			tx.Rollback()
+			return fail(e)
+		}
+		if e = tx.Commit(); e != nil {
+			return fail(e)
+		}
 	}
 	return &Store{db}, nil
 }

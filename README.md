@@ -2,7 +2,7 @@
 
 自主开发的跨平台虚拟局域网工具：端到端加密、P2P 直连优先、中继兜底、完全自托管。
 
-当前状态：M4 开发版。M1–M3 Linux 数据面和管理服务核心实测通过；M4 daemon/IPC 实测、五种 Agent 目标构建、Vue 前端构建通过。原生桌面壳、Windows/macOS 实机及正式安装包尚未验收。详见 [M4 实现与验收](docs/M4_IMPLEMENTATION.md)、[阶段状态](docs/STATUS.md)。
+当前状态：M5 开发版。Linux 混合组网与管理服务、daemon IPC、多注册中继及故障转移核心实测通过；多管理实例高可用、原生桌面壳和生产验收未完成。详见 [M5 实现与验收](docs/M5_IMPLEMENTATION.md)、[阶段状态](docs/STATUS.md)。
 
 ## 构建
 Go 1.23；服务端需 CGO/C 编译器，Agent 支持 CGO_ENABLED=0。桌面 Vue/Tauri 工程位于 apps/desktop，详见 M4 文档。

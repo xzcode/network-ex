@@ -132,7 +132,7 @@ func (s *SignalServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	l, e := Verify(s.issuer, h.Token, time.Now())
-	if e != nil || l.Node != s.node || (h.ID != l.A && h.ID != l.B) || (s.Authorize != nil && !s.Authorize(l)) {
+	if e != nil || l.Node != s.node || (h.ID != l.A && h.ID != l.B) {
 		return
 	}
 	pub, e := hex.DecodeString(h.ID)
@@ -141,6 +141,9 @@ func (s *SignalServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	sig, e := hex.DecodeString(h.Proof)
 	if e != nil || !ed25519.Verify(pub, ProofMessage(ch, h.Token, h.ID), sig) {
+		return
+	}
+	if s.Authorize != nil && !s.Authorize(l) {
 		return
 	}
 	if c.WriteJSON(map[string]string{"status": "ok"}) != nil {

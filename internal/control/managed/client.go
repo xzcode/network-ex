@@ -211,7 +211,7 @@ func Load(dir string) (State, error) {
 }
 func (c *Client) Snapshot(ctx context.Context, s State, key ed25519.PrivateKey, probes ...control.NodeProbe) (control.Snapshot, error) {
 	var snap control.Snapshot
-	req := control.DeviceRequest{ID: s.ID, MultiRelay: true, Probes: probes}
+	req := control.DeviceRequest{ID: s.ID, MultiRelay: true, Advanced: true, Probes: probes}
 	if e := req.Sign(key); e != nil {
 		return snap, e
 	}
@@ -270,17 +270,23 @@ func (c *Client) Probe(ctx context.Context, nodes []control.RelayNode) []control
 }
 
 type Options struct {
+	DNSListen               string
+	AllowSubnets            []string
 	Dir, Interface, RelayCA string
 	Port                    uint16
 	ICEInterfaces           []string
 }
 type PeerInfo struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	IP        string `json:"ip"`
-	RelayNode string `json:"relay_node,omitempty"`
+	Subnets   []string `json:"subnets,omitempty"`
+	DNSLabel  string   `json:"dns_label,omitempty"`
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	IP        string   `json:"ip"`
+	RelayNode string   `json:"relay_node,omitempty"`
 }
 type LocalStatus struct {
+	Exports    []string       `json:"exports,omitempty"`
+	DNSLabel   string         `json:"dns_label,omitempty"`
 	State      string         `json:"state"`
 	Device     control.Device `json:"device"`
 	Revision   int64          `json:"revision"`
@@ -293,6 +299,9 @@ type LocalStatus struct {
 
 func Run(ctx context.Context, o Options) error {
 	var e error
+	if _, e = control.ValidateSubnets(o.AllowSubnets); e != nil {
+		return e
+	}
 	o.Dir, e = filepath.Abs(o.Dir)
 	if e != nil {
 		return e
@@ -325,11 +334,17 @@ func Run(ctx context.Context, o Options) error {
 	if o.RelayCA == "" {
 		o.RelayCA = state.CA
 	}
+	dns, closeDNS, e := startDNS(ctx, o.DNSListen)
+	if e != nil {
+		return e
+	}
+	defer closeDNS()
 	var stop context.CancelFunc
 	var done chan error
 	var applied [32]byte
 	var expiry int64
 	stopTunnel := func() {
+		dns.Clear()
 		if stop != nil {
 			stop()
 			<-done
@@ -349,7 +364,7 @@ func Run(ctx context.Context, o Options) error {
 		}
 	}
 	status := func(mode, err string) {
-		_ = writeJSON(filepath.Join(o.Dir, "managed.json"), LocalStatus{State: mode, Device: last.Device, Revision: last.Revision, ValidUntil: expiry, PeerCount: len(last.Peers), Peers: publicPeers(last.Peers), UpdatedAt: time.Now().UTC(), Error: err})
+		_ = writeJSON(filepath.Join(o.Dir, "managed.json"), LocalStatus{Exports: last.Exports, DNSLabel: last.DNSLabel, State: mode, Device: last.Device, Revision: last.Revision, ValidUntil: expiry, PeerCount: len(last.Peers), Peers: publicPeers(last.Peers), UpdatedAt: time.Now().UTC(), Error: err})
 	}
 	defer func() {
 		if ctx.Err() != nil {
@@ -360,6 +375,7 @@ func Run(ctx context.Context, o Options) error {
 		if done != nil {
 			select {
 			case err := <-done:
+				dns.Clear()
 				stop = nil
 				done = nil
 				applied = [32]byte{}
@@ -406,16 +422,39 @@ func Run(ctx context.Context, o Options) error {
 				stopTunnel()
 				status("pending", "")
 			} else {
+				// Central approval alone must not turn a device into a LAN gateway.
+				optIn := map[string]bool{}
+				for _, p := range o.AllowSubnets {
+					optIn[p] = true
+				}
+				approved := true
+				for _, p := range snap.Exports {
+					if !optIn[p] {
+						approved = false
+					}
+				}
+				if !approved {
+					stopTunnel()
+					status("config-error", "subnet export requires matching local administrator opt-in")
+					select {
+					case <-ctx.Done():
+						return nil
+					case <-time.After(3 * time.Second):
+						continue
+					}
+				}
 				// Exclude rolling expiry and last-seen from configuration fingerprint.
 				b, _ := json.Marshal(struct {
 					Rev             int64
 					IP, Relay, STUN string
 					Peers           []control.Peer
-				}{snap.Revision, snap.Device.IP, snap.RelayURL, snap.STUNURL, snap.Peers})
+					Exports         []string
+				}{snap.Revision, snap.Device.IP, snap.RelayURL, snap.STUNURL, snap.Peers, snap.Exports})
 				hash := sha256.Sum256(b)
 				if applied != hash || stop == nil {
 					stopTunnel()
-					cfg := tunnel.Config{Interface: o.Interface, IP: snap.Device.IP, ListenPort: o.Port, WGKeyFile: filepath.Join(o.Dir, "wg.key"), IdentityKeyFile: filepath.Join(o.Dir, "identity.key"), StatusFile: filepath.Join(o.Dir, "tunnel.json")}
+					u, _ := url.Parse(state.Server)
+					cfg := tunnel.Config{Exports: snap.Exports, ProtectHosts: []string{u.Hostname()}, Interface: o.Interface, IP: snap.Device.IP, ListenPort: o.Port, WGKeyFile: filepath.Join(o.Dir, "wg.key"), IdentityKeyFile: filepath.Join(o.Dir, "identity.key"), StatusFile: filepath.Join(o.Dir, "tunnel.json")}
 					for i, p := range snap.Peers {
 						tokenPath := filepath.Join(runDir, fmt.Sprintf("peer-%d.token", i))
 						if e = os.WriteFile(tokenPath, []byte(p.Lease+"\n"), 0600); e != nil {
@@ -425,7 +464,7 @@ func Run(ctx context.Context, o Options) error {
 						if p.RelayNode == "" {
 							relayURL, stunURL = snap.RelayURL, snap.STUNURL
 						}
-						cfg.Peers = append(cfg.Peers, tunnel.Peer{IP: p.IP, PublicKey: p.WGKey, RelayURL: relayURL, RelayTokenFile: tokenPath, RelayCA: o.RelayCA, ICE: true, STUNURL: stunURL, ICEInterfaces: o.ICEInterfaces})
+						cfg.Peers = append(cfg.Peers, tunnel.Peer{Subnets: p.Subnets, Traffic: p.Traffic, IP: p.IP, PublicKey: p.WGKey, RelayURL: relayURL, RelayTokenFile: tokenPath, RelayCA: o.RelayCA, ICE: true, STUNURL: stunURL, ICEInterfaces: o.ICEInterfaces})
 					}
 					if e = tunnel.Check(cfg); e != nil {
 						status("config-error", e.Error())
@@ -436,9 +475,11 @@ func Run(ctx context.Context, o Options) error {
 						ch := done
 						go func() { ch <- tunnel.Run(child, cfg) }()
 						applied = hash
+						dns.Update(snap)
 						status("applying", "")
 					}
 				} else {
+					dns.Update(snap)
 					status("approved", "")
 				}
 			}
@@ -465,7 +506,7 @@ func Run(ctx context.Context, o Options) error {
 func publicPeers(peers []control.Peer) []PeerInfo {
 	out := make([]PeerInfo, 0, len(peers))
 	for _, p := range peers {
-		out = append(out, PeerInfo{p.ID, p.Name, p.IP, p.RelayNode})
+		out = append(out, PeerInfo{ID: p.ID, Name: p.Name, IP: p.IP, RelayNode: p.RelayNode, Subnets: p.Subnets, DNSLabel: p.DNSLabel})
 	}
 	return out
 }

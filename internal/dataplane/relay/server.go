@@ -80,7 +80,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	l, e := Verify(s.Issuer, h.Token, time.Now())
-	if e != nil || l.Node != s.Node || (h.ID != l.A && h.ID != l.B) || (s.Authorize != nil && !s.Authorize(l)) {
+	if e != nil || l.Node != s.Node || (h.ID != l.A && h.ID != l.B) {
 		return
 	}
 	pub, e := hex.DecodeString(h.ID)
@@ -89,6 +89,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	sig, e := hex.DecodeString(h.Proof)
 	if e != nil || !ed25519.Verify(pub, ProofMessage(ch, h.Token, h.ID), sig) {
+		return
+	}
+	if s.Authorize != nil && !s.Authorize(l) {
 		return
 	}
 	reg := &registration{lease: l, id: h.ID, ws: c, queue: make(chan []byte, 32), done: make(chan struct{})}

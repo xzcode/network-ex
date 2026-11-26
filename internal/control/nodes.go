@@ -371,6 +371,12 @@ type scored struct {
 
 // A shared durable assignment prevents the two devices from selecting different relays.
 func (s *Service) chooseNode(tx *sql.Tx, nid, a, b string, nodes []NodeView) (protocol.RelayNode, error) {
+	// Release old capacity reservations once either device has been absent long
+	// enough for all prior leases to expire. Never remove a still-valid lease.
+	if _, e := tx.Exec("DELETE FROM pair_relays WHERE changed<? AND (a IN (SELECT id FROM devices WHERE last_seen IS NULL OR last_seen<?) OR b IN (SELECT id FROM devices WHERE last_seen IS NULL OR last_seen<?))", now()-180, now()-180, now()-180); e != nil {
+		return protocol.RelayNode{}, e
+	}
+
 	var current string
 	var changed int64
 	e := tx.QueryRow("SELECT node_id,changed FROM pair_relays WHERE network_id=? AND a=? AND b=?", nid, a, b).Scan(&current, &changed)

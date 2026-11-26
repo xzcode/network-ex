@@ -48,6 +48,8 @@ type Response struct {
 	Status *Status `json:"status,omitempty"`
 }
 type Options struct {
+	DNSListen               string
+	AllowSubnets            []string
 	Root, Socket, Interface string
 	SocketGID               int
 	Port                    uint16
@@ -153,7 +155,7 @@ func (d *Daemon) start() error {
 	done := d.done
 	d.lastErr = ""
 	go func() {
-		done <- managed.Run(ctx, managed.Options{Dir: d.profile(), Interface: d.opt.Interface, Port: d.opt.Port, ICEInterfaces: d.opt.ICEInterfaces})
+		done <- managed.Run(ctx, managed.Options{DNSListen: d.opt.DNSListen, AllowSubnets: d.opt.AllowSubnets, Dir: d.profile(), Interface: d.opt.Interface, Port: d.opt.Port, ICEInterfaces: d.opt.ICEInterfaces})
 	}()
 	return nil
 }
@@ -182,7 +184,7 @@ func (d *Daemon) stopRun(persist bool) error {
 }
 func (d *Daemon) status() Status {
 	d.reap()
-	s := Status{Platform: runtime.GOOS, Version: "0.5.0-dev-m5", Running: d.done != nil, Desired: d.desired, Error: d.lastErr}
+	s := Status{Platform: runtime.GOOS, Version: "0.6.0-dev-m6", Running: d.done != nil, Desired: d.desired, Error: d.lastErr}
 	if _, e := os.Lstat(d.profile()); e == nil {
 		s.ProfileExists = true
 	}

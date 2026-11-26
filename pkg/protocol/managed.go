@@ -47,6 +47,7 @@ func (v Enrollment) Verify() bool {
 }
 
 type DeviceRequest struct {
+	Advanced   bool        `json:"advanced,omitempty"`
 	MultiRelay bool        `json:"multi_relay,omitempty"`
 	Probes     []NodeProbe `json:"probes,omitempty"`
 	ID         string      `json:"id"`
@@ -104,16 +105,21 @@ type Rule struct {
 	Allow bool   `json:"allow"`
 }
 type Peer struct {
-	RelayNode string `json:"relay_node,omitempty"`
-	RelayURL  string `json:"relay_url,omitempty"`
-	STUNURL   string `json:"stun_url,omitempty"`
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	IP        string `json:"ip"`
-	WGKey     string `json:"wg_key"`
-	Lease     string `json:"lease"`
+	Subnets   []string       `json:"subnets,omitempty"`
+	DNSLabel  string         `json:"dns_label,omitempty"`
+	Traffic   *TrafficPolicy `json:"traffic,omitempty"`
+	RelayNode string         `json:"relay_node,omitempty"`
+	RelayURL  string         `json:"relay_url,omitempty"`
+	STUNURL   string         `json:"stun_url,omitempty"`
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	IP        string         `json:"ip"`
+	WGKey     string         `json:"wg_key"`
+	Lease     string         `json:"lease"`
 }
 type Snapshot struct {
+	Exports    []string    `json:"exports,omitempty"`
+	DNSLabel   string      `json:"dns_label,omitempty"`
 	Nodes      []RelayNode `json:"nodes,omitempty"`
 	Device     Device      `json:"device"`
 	Revision   int64       `json:"revision"`

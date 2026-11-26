@@ -24,7 +24,7 @@ import (
 	"golang.org/x/crypto/curve25519"
 )
 
-const version = "0.5.0-dev-m5"
+const version = "0.6.0-dev-m6"
 
 func main() {
 	if e := run(os.Args[1:]); e != nil {
@@ -88,6 +88,8 @@ func run(args []string) error {
 		iface := f.String("interface", daemon.DefaultInterface(), "overlay interface")
 		port := f.Uint("listen-port", 51820, "UDP port")
 		iceIf := f.String("ice-interfaces", "", "comma-separated ICE interface allowlist")
+		allowSubnets := f.String("allow-subnets", "", "comma-separated approved private CIDRs, local gateway opt-in")
+		dnsListen := f.String("dns-listen", "", "optional loopback DNS listener (e.g. 127.0.0.1:15353)")
 		if e := f.Parse(args[1:]); e != nil {
 			return e
 		}
@@ -103,7 +105,7 @@ func run(args []string) error {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		return service.Run(ctx, func(c context.Context) error {
-			return daemon.Serve(c, daemon.Options{Root: *root, Socket: *sock, SocketGID: *gid, Interface: *iface, Port: uint16(*port), ICEInterfaces: ifaces})
+			return daemon.Serve(c, daemon.Options{DNSListen: *dnsListen, AllowSubnets: splitList(*allowSubnets), Root: *root, Socket: *sock, SocketGID: *gid, Interface: *iface, Port: uint16(*port), ICEInterfaces: ifaces})
 		})
 	case "ctl":
 		f := flag.NewFlagSet("ctl", flag.ContinueOnError)
@@ -147,6 +149,8 @@ func run(args []string) error {
 		port := f.Uint("listen-port", 51820, "UDP port")
 		iceIf := f.String("ice-interfaces", "", "comma-separated interface allowlist")
 		relayCA := f.String("relay-ca", "", "optional separate relay CA")
+		allowSubnets := f.String("allow-subnets", "", "comma-separated approved private CIDRs, local gateway opt-in")
+		dnsListen := f.String("dns-listen", "", "optional loopback DNS listener (e.g. 127.0.0.1:15353)")
 		if e := f.Parse(args[1:]); e != nil {
 			return e
 		}
@@ -161,7 +165,7 @@ func run(args []string) error {
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		return managed.Run(ctx, managed.Options{Dir: *dir, Interface: *iface, Port: uint16(*port), ICEInterfaces: ifaces, RelayCA: *relayCA})
+		return managed.Run(ctx, managed.Options{DNSListen: *dnsListen, AllowSubnets: splitList(*allowSubnets), Dir: *dir, Interface: *iface, Port: uint16(*port), ICEInterfaces: ifaces, RelayCA: *relayCA})
 	case "status":
 		f := flag.NewFlagSet("status", flag.ContinueOnError)
 		p := f.String("file", "", "status file")
@@ -206,3 +210,13 @@ func run(args []string) error {
 }
 
 var _ = hex.EncodeToString
+
+func splitList(raw string) []string {
+	var out []string
+	for _, v := range strings.Split(raw, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}

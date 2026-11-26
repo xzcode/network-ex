@@ -1,4 +1,4 @@
-export interface PeerInfo {id:string;name:string;ip:string}
+export interface PeerInfo {id:string;name:string;ip:string;relay_node?:string;subnets?:string[];dns_label?:string}
 export interface TunnelPeer {ip:string;mode:string;handshake_unix:string;rx_bytes:string;tx_bytes:string;relay_connected:boolean;ice?:{selected:boolean;state:string;direct_tx_bytes:number;direct_rx_bytes:number}}
 export interface AgentStatus {platform:string;version:string;profile?:{server:string;id:string;network_id:string};profile_exists:boolean;running:boolean;desired:boolean;managed?:{state:string;device:{id:string;name:string;ip:string;status:string};revision:number;valid_until:number;peer_count:number;peers?:PeerInfo[];updated_at:string;error?:string};tunnel?:{state:string;ip:string;updated_at:string;peers?:TunnelPeer[]};error?:string}
 export interface Request {action:'status'|'enroll'|'connect'|'disconnect'|'forget'|'diagnostics';server?:string;name?:string;invite?:string;ca_pem?:string;confirm?:boolean}

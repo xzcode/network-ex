@@ -7,7 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/pion/stun"
+	"github.com/xzcode/network-ex/internal/dataplane/guard"
+	"github.com/xzcode/network-ex/pkg/protocol"
+	"net"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -25,24 +30,28 @@ import (
 )
 
 type Config struct {
-	Interface       string `json:"interface"`
-	IP              string `json:"ip"`
-	ListenPort      uint16 `json:"listen_port"`
-	WGKeyFile       string `json:"wg_key_file"`
-	IdentityKeyFile string `json:"identity_key_file"`
-	StatusFile      string `json:"status_file"`
-	Peers           []Peer `json:"peers"`
+	Exports         []string `json:"exports,omitempty"`
+	ProtectHosts    []string `json:"protect_hosts,omitempty"`
+	Interface       string   `json:"interface"`
+	IP              string   `json:"ip"`
+	ListenPort      uint16   `json:"listen_port"`
+	WGKeyFile       string   `json:"wg_key_file"`
+	IdentityKeyFile string   `json:"identity_key_file"`
+	StatusFile      string   `json:"status_file"`
+	Peers           []Peer   `json:"peers"`
 }
 type Peer struct {
-	IP             string   `json:"ip"`
-	PublicKey      string   `json:"public_key"`
-	Direct         string   `json:"direct"`
-	RelayURL       string   `json:"relay_url"`
-	RelayTokenFile string   `json:"relay_token_file"`
-	RelayCA        string   `json:"relay_ca"`
-	ICE            bool     `json:"ice"`
-	STUNURL        string   `json:"stun_url"`
-	ICEInterfaces  []string `json:"ice_interfaces"`
+	Subnets        []string                `json:"subnets,omitempty"`
+	Traffic        *protocol.TrafficPolicy `json:"traffic,omitempty"`
+	IP             string                  `json:"ip"`
+	PublicKey      string                  `json:"public_key"`
+	Direct         string                  `json:"direct"`
+	RelayURL       string                  `json:"relay_url"`
+	RelayTokenFile string                  `json:"relay_token_file"`
+	RelayCA        string                  `json:"relay_ca"`
+	ICE            bool                    `json:"ice"`
+	STUNURL        string                  `json:"stun_url"`
+	ICEInterfaces  []string                `json:"ice_interfaces"`
 }
 type PeerStatus struct {
 	IP             string         `json:"ip"`
@@ -79,12 +88,111 @@ func overlay(s string) (netip.Addr, error) {
 	}
 	return a, nil
 }
+func scopes(c Config) ([]netip.Prefix, []netip.Prefix, []guard.Peer, error) {
+	ip, e := overlay(c.IP)
+	if e != nil {
+		return nil, nil, nil, e
+	}
+	local, e := protocol.ValidateSubnets(c.Exports)
+	if e != nil {
+		return nil, nil, nil, e
+	}
+	own := []netip.Prefix{netip.PrefixFrom(ip, 32)}
+	for _, p := range local {
+		if p.Contains(ip) {
+			return nil, nil, nil, errors.New("local export overlaps overlay address")
+		}
+		own = append(own, p)
+	}
+	remote := []netip.Prefix{}
+	peers := []guard.Peer{}
+	for _, p := range c.Peers {
+		a, e := overlay(p.IP)
+		if e != nil {
+			return nil, nil, nil, e
+		}
+		sub, e := protocol.ValidateSubnets(p.Subnets)
+		if e != nil {
+			return nil, nil, nil, e
+		}
+		gp := guard.Peer{Prefixes: append([]netip.Prefix{netip.PrefixFrom(a, 32)}, sub...), Policy: p.Traffic}
+		remote = append(remote, sub...)
+		peers = append(peers, gp)
+	}
+	if len(remote) > 64 {
+		return nil, nil, nil, errors.New("too many remote subnets")
+	}
+	if _, e = guard.New(own, peers); e != nil {
+		return nil, nil, nil, e
+	}
+	return own, remote, peers, nil
+}
+func protectUnderlay(ctx context.Context, c Config, remote []netip.Prefix) error {
+	if len(remote) == 0 {
+		return nil
+	}
+	hosts := append([]string(nil), c.ProtectHosts...)
+	for _, p := range c.Peers {
+		if p.Direct != "" {
+			a, e := netip.ParseAddrPort(p.Direct)
+			if e != nil {
+				return e
+			}
+			hosts = append(hosts, a.Addr().String())
+		}
+		if p.RelayURL != "" {
+			u, e := url.Parse(p.RelayURL)
+			if e != nil || u.Hostname() == "" {
+				return errors.New("invalid relay endpoint")
+			}
+			hosts = append(hosts, u.Hostname())
+		}
+		if p.STUNURL != "" {
+			u, e := stun.ParseURI(p.STUNURL)
+			if e != nil {
+				return e
+			}
+			hosts = append(hosts, u.Host)
+		}
+	}
+	if len(hosts) > 200 {
+		return errors.New("too many protected underlay hosts")
+	}
+	seen := map[string]bool{}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	for _, h := range hosts {
+		if seen[h] {
+			continue
+		}
+		seen[h] = true
+		if h == "" {
+			return errors.New("invalid protected host")
+		}
+		ips, e := net.DefaultResolver.LookupNetIP(ctx, "ip4", h)
+		if e != nil || len(ips) == 0 {
+			return fmt.Errorf("cannot verify protected host %s", h)
+		}
+		for _, a := range ips {
+			for _, p := range remote {
+				if p.Contains(a) {
+					return fmt.Errorf("remote subnet %s captures underlay endpoint %s", p, h)
+				}
+			}
+		}
+	}
+	return nil
+}
 func prepare(c Config) (netip.Addr, []transport.Peer, []netip.Addr, string, error) {
 	var peers []transport.Peer
 	var routes []netip.Addr
 	var u strings.Builder
 	bad := func(e error) (netip.Addr, []transport.Peer, []netip.Addr, string, error) {
 		return netip.Addr{}, nil, nil, "", e
+	}
+	own, remote, _, e := scopes(c)
+	if e != nil {
+		return bad(e)
 	}
 	ip, e := overlay(c.IP)
 	if e != nil {
@@ -144,7 +252,7 @@ func prepare(c Config) (netip.Addr, []transport.Peer, []netip.Addr, string, erro
 			}
 			t.Relay = &relay.Client{URL: p.RelayURL, Token: strings.TrimSpace(string(token)), CAFile: p.RelayCA, Key: ed25519.PrivateKey(k)}
 			if p.ICE {
-				t.ICE = &path.ICE{Relay: t.Relay, STUN: p.STUNURL, Interface: c.Interface, Excluded: used, Interfaces: p.ICEInterfaces}
+				t.ICE = &path.ICE{Relay: t.Relay, STUN: p.STUNURL, Interface: c.Interface, Excluded: used, ExcludedPrefixes: remote, Interfaces: p.ICEInterfaces}
 			} else if p.STUNURL != "" || len(p.ICEInterfaces) > 0 {
 				return bad(errors.New("stun_url and ice_interfaces require ice=true"))
 			}
@@ -153,8 +261,24 @@ func prepare(c Config) (netip.Addr, []transport.Peer, []netip.Addr, string, erro
 		peers = append(peers, t)
 		routes = append(routes, a)
 		fmt.Fprintf(&u, "public_key=%x\nendpoint=%s\nreplace_allowed_ips=true\nallowed_ip=%s/32\npersistent_keepalive_interval=5\n", pk, logical, a)
+		for _, sub := range p.Subnets {
+			fmt.Fprintf(&u, "allowed_ip=%s\n", sub)
+		}
+
 	}
 	for _, p := range peers {
+		if p.Direct.IsValid() {
+			for _, prefix := range remote {
+				if prefix.Contains(p.Direct.Addr()) {
+					return bad(errors.New("direct endpoint overlaps remote subnet"))
+				}
+			}
+			for _, prefix := range own {
+				if prefix.Contains(p.Direct.Addr()) {
+					return bad(errors.New("direct endpoint overlaps exported subnet"))
+				}
+			}
+		}
 		if p.Direct.IsValid() && used[p.Direct.Addr()] {
 			return bad(errors.New("direct endpoint overlaps overlay"))
 		}
@@ -181,6 +305,20 @@ func Run(ctx context.Context, c Config) error {
 	if e != nil {
 		return e
 	}
+	own, remote, scopedPeers, e := scopes(c)
+	if e != nil {
+		return e
+	}
+	g, e := guard.New(own, scopedPeers)
+	if e != nil {
+		return e
+	}
+	if e = protectUnderlay(ctx, c, remote); e != nil {
+		return e
+	}
+	if e = platform.PreflightSubnets(c.Interface, own[1:], remote); e != nil {
+		return e
+	}
 	if e = platform.Preflight(c.Interface, ip, routes); e != nil {
 		return e
 	}
@@ -188,7 +326,7 @@ func Run(ctx context.Context, c Config) error {
 	if e != nil {
 		return e
 	}
-	dev := device.NewDevice(t, b, device.NewLogger(device.LogLevelError, "network-ex: "))
+	dev := device.NewDevice(&guard.Device{Device: t, Guard: g}, b, device.NewLogger(device.LogLevelError, "network-ex: "))
 	defer dev.Close()
 	name, e := t.Name()
 	if e != nil {
@@ -202,6 +340,9 @@ func Run(ctx context.Context, c Config) error {
 		return e
 	}
 	if e = platform.Configure(name, ip, routes); e != nil {
+		return e
+	}
+	if e = platform.ConfigureSubnets(name, remote); e != nil {
 		return e
 	}
 	if e = dev.Up(); e != nil {

@@ -93,6 +93,10 @@ func (s *Service) Handler() http.Handler {
 	route("GET /api/v1/audit", s.auditList)
 	route("POST /api/v1/devices/enroll", s.enroll)
 	route("POST /api/v1/devices/snapshot", s.snapshot)
+	route("GET /api/v1/networks/{id}/advanced", s.advanced)
+	route("PUT /api/v1/networks/{id}/devices/{device}/advanced", s.setAdvancedDevice)
+	route("PUT /api/v1/networks/{id}/traffic", s.setTraffic)
+
 	route("GET /api/v1/relay/nodes", s.listNodes)
 	route("POST /api/v1/relay/nodes", s.createNode)
 	route("PUT /api/v1/relay/nodes/{id}/state", s.nodeState)
@@ -371,29 +375,7 @@ func (s *Service) createNetwork(w http.ResponseWriter, r *http.Request) error {
 	}
 	n := Network{id, v.Name, p.String(), 1, v.Policy, u.ID}
 	e = withTx(r.Context(), s.Store, func(tx *sql.Tx) error {
-		rows, e := tx.Query("SELECT cidr FROM networks")
-		if e != nil {
-			return e
-		}
-		for rows.Next() {
-			var old string
-			if e = rows.Scan(&old); e != nil {
-				rows.Close()
-				return e
-			}
-			op, e := prefix(old)
-			if e != nil {
-				rows.Close()
-				return e
-			}
-			if p.Overlaps(op) {
-				rows.Close()
-				return failure(409, "network CIDR overlaps")
-			}
-		}
-		e = rows.Err()
-		rows.Close()
-		if e != nil {
+		if e := subnetConflicts(tx, p, ""); e != nil {
 			return e
 		}
 		if _, e = tx.Exec("INSERT INTO networks(id,owner_id,name,cidr,revision,policy,created_at) VALUES(?,?,?,?,1,?,?)", id, u.ID, n.Name, n.CIDR, n.Policy, now()); e != nil {
@@ -567,6 +549,15 @@ func (s *Service) changeDevice(w http.ResponseWriter, r *http.Request, approve b
 				return nil
 			}
 			d.Status = "revoked"
+			if _, e = tx.Exec("DELETE FROM subnet_routes WHERE device_id=?", id); e != nil {
+				return e
+			}
+			if _, e = tx.Exec("DELETE FROM dns_aliases WHERE device_id=?", id); e != nil {
+				return e
+			}
+			if _, e = tx.Exec("DELETE FROM traffic_rules WHERE a=? OR b=?", id, id); e != nil {
+				return e
+			}
 			if _, e = tx.Exec("UPDATE devices SET status='revoked' WHERE id=?", id); e != nil {
 				return e
 			}
@@ -763,6 +754,15 @@ func (s *Service) snapshot(w http.ResponseWriter, r *http.Request) error {
 		if d.Status != "approved" {
 			return nil
 		}
+		advanced, traffic, e := advancedFor(tx, d.NetworkID)
+		if e != nil {
+			return e
+		}
+		if !v.Advanced && (len(advanced) > 0 || len(traffic) > 0) {
+			return failure(426, "advanced network policy requires M6 agent")
+		}
+		out.Exports = advanced[d.ID].Subnets
+		out.DNSLabel = advanced[d.ID].DNSLabel
 		if e = s.recordProbes(tx, d, v.Probes); e != nil {
 			return e
 		}
@@ -828,6 +828,9 @@ func (s *Service) snapshot(w http.ResponseWriter, r *http.Request) error {
 			if selected.ID == "" {
 				continue
 			}
+			c.peer.Subnets = advanced[c.peer.ID].Subnets
+			c.peer.DNSLabel = advanced[c.peer.ID].DNSLabel
+			c.peer.Traffic = traffic[[2]string{a, b}]
 			c.peer.RelayNode = selected.ID
 			c.peer.RelayURL = selected.RelayURL
 			c.peer.STUNURL = selected.STUNURL

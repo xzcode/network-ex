@@ -29,6 +29,7 @@ type ICE struct {
 	STUN                         string
 	Interface                    string
 	Excluded                     map[netip.Addr]bool
+	ExcludedPrefixes             []netip.Prefix
 	Interfaces                   []string
 	mu                           sync.RWMutex
 	c                            *ice.Conn
@@ -73,6 +74,11 @@ func (p *ICE) allowedIP(ip net.IP) bool {
 		return false
 	}
 	a = a.Unmap()
+	for _, prefix := range p.ExcludedPrefixes {
+		if prefix.Contains(a) {
+			return false
+		}
+	}
 	return a.Is4() && !a.IsUnspecified() && !a.IsLoopback() && !a.IsMulticast() && !a.IsLinkLocalUnicast() && !p.Excluded[a]
 }
 func (p *ICE) allowedInterface(name string) bool {

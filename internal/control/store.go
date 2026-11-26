@@ -67,39 +67,36 @@ func Open(path string) (*Store, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	fail := func(e error) (*Store, error) { db.Close(); return nil, e }
-	var v int
-	if e = db.QueryRow("PRAGMA user_version").Scan(&v); e != nil {
+	tx, e := db.Begin()
+	if e != nil {
 		return fail(e)
 	}
-	switch v {
-	case 0:
-		tx, e := db.Begin()
-		if e != nil {
-			return fail(e)
+	var v int
+	migrate := func() error {
+		if e := tx.QueryRow("PRAGMA user_version").Scan(&v); e != nil {
+			return e
 		}
-		if _, e = tx.Exec(schema); e != nil {
-			tx.Rollback()
-			return fail(e)
+		if v < 0 || v > 3 {
+			return fmt.Errorf("unsupported database schema %d", v)
 		}
-		if e = tx.Commit(); e != nil {
-			return fail(e)
+		for _, m := range []struct {
+			version int
+			sql     string
+		}{{1, schema}, {2, schemaV2}, {3, schemaV3}} {
+			if v < m.version {
+				if _, e := tx.Exec(m.sql); e != nil {
+					return e
+				}
+			}
 		}
-	case 1, 2:
-	default:
-		return fail(fmt.Errorf("unsupported database schema %d", v))
+		return nil
 	}
-	if v < 2 {
-		tx, e := db.Begin()
-		if e != nil {
-			return fail(e)
-		}
-		if _, e = tx.Exec(schemaV2); e != nil {
-			tx.Rollback()
-			return fail(e)
-		}
-		if e = tx.Commit(); e != nil {
-			return fail(e)
-		}
+	if e = migrate(); e != nil {
+		tx.Rollback()
+		return fail(e)
+	}
+	if e = tx.Commit(); e != nil {
+		return fail(e)
 	}
 	return &Store{db}, nil
 }

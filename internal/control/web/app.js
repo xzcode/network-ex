@@ -47,6 +47,12 @@ async function refreshAdvanced(n){
  $("trafficRules").replaceChildren(...view.rules.map(r=>el("p",(names.get(r.a)||r.a)+" ↔ "+(names.get(r.b)||r.b)+" · "+(r.policy.services.length?r.policy.services.map(s=>s.protocol+(s.port?":"+s.port:"")).join(", "):"拒绝全部服务"))));
  fillAdvancedDevice();
  $("exitSection").hidden=user?.role!=="admin";
+ $("discoverySection").hidden=user?.role!=="admin";
+ if(user?.role==="admin"){
+  const discovery=await api("/networks/"+n.id+"/discovery");if(selected?.id!==n.id)return;
+  $("discoveryForm").elements.rules.value=(discovery.rules||[]).map(r=>r.destination+":"+r.port).join("\n");
+ }
+
  if(user?.role==="admin"){
   for(const field of [$("exitGrant").elements.client,$("exitGrant").elements.gateway]){
    const old=field.value;field.replaceChildren(...approved.map(d=>{const o=el("option",names.get(d.id));o.value=d.id;return o}));if(approved.some(d=>d.id===old))field.value=old;
@@ -62,3 +68,13 @@ $("trafficRule").onsubmit=guarded(async e=>{if(!selected)return;const f=formObje
 
 $("exitGrant").onsubmit=guarded(async e=>{if(!selected||user?.role!=="admin")return;const f=formObject(e.target);const targets=f.targets.split(",").map(x=>x.trim()).filter(Boolean);if(!targets.length)throw Error("请填写指定公网 IPv4，或使用撤销按钮");await api("/networks/"+selected.id+"/exit","PUT",{client:f.client,gateway:f.gateway,targets});await refresh();msg("出口授权已保存")});
 $("removeExit").onclick=guarded(async()=>{if(!selected||user?.role!=="admin"||!confirm("撤销此设备的出口授权？"))return;await api("/networks/"+selected.id+"/exit","PUT",{client:$("exitGrant").elements.client.value,gateway:"",targets:[]});await refresh();msg("出口授权已撤销")});
+
+$("discoveryForm").onsubmit=guarded(async e=>{
+ if(!selected||user?.role!=="admin")return;
+ const rules=e.target.elements.rules.value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean).map(x=>{
+  const m=/^([0-9.]+):([0-9]+)$/.exec(x);
+  if(!m||Number(m[2])<1||Number(m[2])>65535)throw Error("无效发现规则："+x);
+  return{destination:m[1],port:Number(m[2])};
+ });
+ await api("/networks/"+selected.id+"/discovery","PUT",{rules});await refresh();msg("游戏联机发现规则已保存");
+});

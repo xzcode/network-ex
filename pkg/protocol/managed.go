@@ -47,6 +47,7 @@ func (v Enrollment) Verify() bool {
 }
 
 type DeviceRequest struct {
+	Discovery  bool        `json:"discovery,omitempty"`
 	ExitRoutes bool        `json:"exit_routes,omitempty"`
 	Advanced   bool        `json:"advanced,omitempty"`
 	MultiRelay bool        `json:"multi_relay,omitempty"`
@@ -106,6 +107,7 @@ type Rule struct {
 	Allow bool   `json:"allow"`
 }
 type Peer struct {
+	Discovery   bool           `json:"discovery,omitempty"`
 	ExitTargets []string       `json:"exit_targets,omitempty"`
 	ExitServed  []string       `json:"exit_served,omitempty"`
 	Subnets     []string       `json:"subnets,omitempty"`
@@ -121,15 +123,17 @@ type Peer struct {
 	Lease       string         `json:"lease"`
 }
 type Snapshot struct {
-	Exports    []string    `json:"exports,omitempty"`
-	DNSLabel   string      `json:"dns_label,omitempty"`
-	Nodes      []RelayNode `json:"nodes,omitempty"`
-	Device     Device      `json:"device"`
-	Revision   int64       `json:"revision"`
-	ValidUntil int64       `json:"valid_until"`
-	RelayURL   string      `json:"relay_url"`
-	STUNURL    string      `json:"stun_url"`
-	Peers      []Peer      `json:"peers"`
+	Discovery   DiscoveryPolicy `json:"discovery"`
+	NetworkCIDR string          `json:"network_cidr,omitempty"`
+	Exports     []string        `json:"exports,omitempty"`
+	DNSLabel    string          `json:"dns_label,omitempty"`
+	Nodes       []RelayNode     `json:"nodes,omitempty"`
+	Device      Device          `json:"device"`
+	Revision    int64           `json:"revision"`
+	ValidUntil  int64           `json:"valid_until"`
+	RelayURL    string          `json:"relay_url"`
+	STUNURL     string          `json:"stun_url"`
+	Peers       []Peer          `json:"peers"`
 }
 
 func now() int64 { return time.Now().Unix() }

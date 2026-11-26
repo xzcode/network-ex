@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/pion/stun"
+	"github.com/xzcode/network-ex/internal/dataplane/discovery"
 	"github.com/xzcode/network-ex/internal/dataplane/guard"
 	"github.com/xzcode/network-ex/pkg/protocol"
 	"net"
@@ -31,18 +32,21 @@ import (
 )
 
 type Config struct {
-	ManagedExit     bool     `json:"-"`
-	Exports         []string `json:"exports,omitempty"`
-	ProtectHosts    []string `json:"protect_hosts,omitempty"`
-	Interface       string   `json:"interface"`
-	IP              string   `json:"ip"`
-	ListenPort      uint16   `json:"listen_port"`
-	WGKeyFile       string   `json:"wg_key_file"`
-	IdentityKeyFile string   `json:"identity_key_file"`
-	StatusFile      string   `json:"status_file"`
-	Peers           []Peer   `json:"peers"`
+	Discovery       protocol.DiscoveryPolicy `json:"-"`
+	NetworkCIDR     string                   `json:"-"`
+	ManagedExit     bool                     `json:"-"`
+	Exports         []string                 `json:"exports,omitempty"`
+	ProtectHosts    []string                 `json:"protect_hosts,omitempty"`
+	Interface       string                   `json:"interface"`
+	IP              string                   `json:"ip"`
+	ListenPort      uint16                   `json:"listen_port"`
+	WGKeyFile       string                   `json:"wg_key_file"`
+	IdentityKeyFile string                   `json:"identity_key_file"`
+	StatusFile      string                   `json:"status_file"`
+	Peers           []Peer                   `json:"peers"`
 }
 type Peer struct {
+	Discovery      bool                    `json:"-"`
 	ExitTargets    []string                `json:"exit_targets,omitempty"`
 	ExitServed     []string                `json:"exit_served,omitempty"`
 	Subnets        []string                `json:"subnets,omitempty"`
@@ -67,10 +71,11 @@ type PeerStatus struct {
 	ICE            *path.Snapshot `json:"ice,omitempty"`
 }
 type Status struct {
-	State     string       `json:"state"`
-	IP        string       `json:"ip"`
-	UpdatedAt time.Time    `json:"updated_at"`
-	Peers     []PeerStatus `json:"peers"`
+	Discovery *discovery.Stats `json:"discovery,omitempty"`
+	State     string           `json:"state"`
+	IP        string           `json:"ip"`
+	UpdatedAt time.Time        `json:"updated_at"`
+	Peers     []PeerStatus     `json:"peers"`
 }
 
 func Load(path string) (Config, error) {
@@ -305,6 +310,15 @@ func prepare(c Config) (netip.Addr, []transport.Peer, []netip.Addr, string, erro
 	return ip, peers, routes, u.String(), nil
 }
 func Check(c Config) error {
+	if len(c.Discovery.Rules) > 0 {
+		if e := c.Discovery.Validate(c.NetworkCIDR); e != nil {
+			return e
+		}
+		if runtime.GOOS != "linux" {
+			return errors.New("discovery currently requires Linux")
+		}
+	}
+
 	_, p, _, _, e := prepare(c)
 	if e != nil {
 		return e
@@ -368,7 +382,25 @@ func Run(ctx context.Context, c Config) error {
 	if e != nil {
 		return e
 	}
-	dev := device.NewDevice(&guard.Device{Device: t, Guard: g}, b, device.NewLogger(device.LogLevelError, "network-ex: "))
+	var wrapped wgtun.Device = &guard.Device{Device: t, Guard: g}
+	var codec *discovery.Codec
+	if len(c.Discovery.Rules) > 0 {
+		if e = c.Discovery.Validate(c.NetworkCIDR); e != nil {
+			t.Close()
+			return e
+		}
+		ps := []discovery.Peer{}
+		for _, p := range c.Peers {
+			a, _ := overlay(p.IP)
+			if p.Discovery {
+				ps = append(ps, discovery.Peer{IP: a, Traffic: p.Traffic})
+			}
+		}
+		codec = discovery.New(ip, c.Discovery.Rules, ps)
+		wrapped = &discovery.Device{Device: t, Guard: g, Codec: codec}
+	}
+	dev := device.NewDevice(wrapped, b, device.NewLogger(device.LogLevelError, "network-ex: "))
+
 	defer dev.Close()
 	name, e := t.Name()
 	if e != nil {
@@ -387,6 +419,9 @@ func Run(ctx context.Context, c Config) error {
 	if e = platform.ConfigureSubnets(name, remote); e != nil {
 		return e
 	}
+	if e = platform.ConfigureDiscovery(name, ip, c.Discovery.Rules); e != nil {
+		return e
+	}
 	setupMu.Unlock()
 	setupLocked = false
 	if e = dev.Up(); e != nil {
@@ -397,6 +432,10 @@ func Run(ctx context.Context, c Config) error {
 			return nil
 		}
 		s := Status{State: state, IP: ip.String(), UpdatedAt: time.Now().UTC()}
+		if codec != nil {
+			v := codec.Stats()
+			s.Discovery = &v
+		}
 		wg, e := dev.IpcGet()
 		if e != nil {
 			return e

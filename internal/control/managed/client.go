@@ -36,8 +36,9 @@ type State struct {
 	NetworkID string `json:"network_id"`
 }
 type Client struct {
-	base string
-	http *http.Client
+	Discovery bool
+	base      string
+	http      *http.Client
 }
 
 func NewClient(server, ca string) (*Client, error) {
@@ -212,7 +213,7 @@ func Load(dir string) (State, error) {
 }
 func (c *Client) Snapshot(ctx context.Context, s State, key ed25519.PrivateKey, probes ...control.NodeProbe) (control.Snapshot, error) {
 	var snap control.Snapshot
-	req := control.DeviceRequest{ID: s.ID, MultiRelay: true, Advanced: true, ExitRoutes: true, Probes: probes}
+	req := control.DeviceRequest{ID: s.ID, MultiRelay: true, Advanced: true, ExitRoutes: true, Discovery: c.Discovery, Probes: probes}
 	if e := req.Sign(key); e != nil {
 		return snap, e
 	}
@@ -271,6 +272,7 @@ func (c *Client) Probe(ctx context.Context, nodes []control.RelayNode) []control
 }
 
 type Options struct {
+	Discovery                     bool
 	ExitVia                       string
 	ExitTargets, AllowExitTargets []string
 	DNSHub                        *DNSHub
@@ -332,6 +334,7 @@ func Run(ctx context.Context, o Options) (runErr error) {
 	if e != nil {
 		return e
 	}
+	c.Discovery = o.Discovery
 	lock := filepath.Join(o.Dir, "run.lock")
 	f, e := os.OpenFile(lock, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if e != nil {
@@ -498,7 +501,10 @@ func Run(ctx context.Context, o Options) (runErr error) {
 				if applied != hash || stop == nil {
 					stopTunnel()
 					u, _ := url.Parse(state.Server)
-					cfg := tunnel.Config{ManagedExit: true, Exports: snap.Exports, ProtectHosts: []string{u.Hostname()}, Interface: o.Interface, IP: snap.Device.IP, ListenPort: o.Port, WGKeyFile: filepath.Join(o.Dir, "wg.key"), IdentityKeyFile: filepath.Join(o.Dir, "identity.key"), StatusFile: filepath.Join(o.Dir, "tunnel.json")}
+					cfg := tunnel.Config{ManagedExit: true, NetworkCIDR: snap.NetworkCIDR, Exports: snap.Exports, ProtectHosts: []string{u.Hostname()}, Interface: o.Interface, IP: snap.Device.IP, ListenPort: o.Port, WGKeyFile: filepath.Join(o.Dir, "wg.key"), IdentityKeyFile: filepath.Join(o.Dir, "identity.key"), StatusFile: filepath.Join(o.Dir, "tunnel.json")}
+					if o.Discovery {
+						cfg.Discovery = snap.Discovery
+					}
 					for i, p := range snap.Peers {
 						tokenPath := filepath.Join(runDir, fmt.Sprintf("peer-%d.token", i))
 						if e = os.WriteFile(tokenPath, []byte(p.Lease+"\n"), 0600); e != nil {
@@ -513,7 +519,7 @@ func Run(ctx context.Context, o Options) (runErr error) {
 							targets = intersection(p.ExitTargets, o.ExitTargets)
 						}
 						served = intersection(p.ExitServed, o.AllowExitTargets)
-						cfg.Peers = append(cfg.Peers, tunnel.Peer{ExitTargets: targets, ExitServed: served, Subnets: p.Subnets, Traffic: p.Traffic, IP: p.IP, PublicKey: p.WGKey, RelayURL: relayURL, RelayTokenFile: tokenPath, RelayCA: o.RelayCA, ICE: true, STUNURL: stunURL, ICEInterfaces: o.ICEInterfaces})
+						cfg.Peers = append(cfg.Peers, tunnel.Peer{Discovery: p.Discovery, ExitTargets: targets, ExitServed: served, Subnets: p.Subnets, Traffic: p.Traffic, IP: p.IP, PublicKey: p.WGKey, RelayURL: relayURL, RelayTokenFile: tokenPath, RelayCA: o.RelayCA, ICE: true, STUNURL: stunURL, ICEInterfaces: o.ICEInterfaces})
 					}
 					if e = tunnel.Check(cfg); e != nil {
 						status("config-error", e.Error())

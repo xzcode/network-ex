@@ -98,6 +98,8 @@ func (s *Service) Handler() http.Handler {
 	route("PUT /api/v1/networks/{id}/traffic", s.setTraffic)
 	route("GET /api/v1/networks/{id}/exit", s.listExit)
 	route("PUT /api/v1/networks/{id}/exit", s.setExit)
+	route("GET /api/v1/networks/{id}/discovery", s.getDiscovery)
+	route("PUT /api/v1/networks/{id}/discovery", s.setDiscovery)
 
 	route("GET /api/v1/relay/nodes", s.listNodes)
 	route("POST /api/v1/relay/nodes", s.createNode)
@@ -746,18 +748,29 @@ func (s *Service) snapshot(w http.ResponseWriter, r *http.Request) error {
 		if affected != 1 {
 			return failure(409, "replayed request")
 		}
-		if _, e = tx.Exec("UPDATE devices SET last_seen=? WHERE id=?", t, d.ID); e != nil {
+		if _, e = tx.Exec("UPDATE devices SET last_seen=?,discovery_enabled=? WHERE id=?", t, v.Discovery, d.ID); e != nil {
 			return e
 		}
 		d.LastSeen = t
 		var rev int64
-		var policy string
-		if e = tx.QueryRow("SELECT revision,policy FROM networks WHERE id=?", d.NetworkID).Scan(&rev, &policy); e != nil {
+		var policy, cidr string
+		if e = tx.QueryRow("SELECT revision,policy,cidr FROM networks WHERE id=?", d.NetworkID).Scan(&rev, &policy, &cidr); e != nil {
 			return e
 		}
 		out = Snapshot{Device: d, Revision: rev, ValidUntil: t + 20, Peers: []Peer{}}
 		if d.Status != "approved" {
 			return nil
+		}
+		out.NetworkCIDR = cidr
+		discovery, e := discoveryFor(tx, d.NetworkID)
+		if e != nil {
+			return e
+		}
+		if e = discovery.Validate(cidr); e != nil {
+			return e
+		}
+		if v.Discovery {
+			out.Discovery = discovery
 		}
 		advanced, traffic, e := advancedFor(tx, d.NetworkID)
 		if e != nil {
@@ -792,18 +805,20 @@ func (s *Service) snapshot(w http.ResponseWriter, r *http.Request) error {
 		}
 		out.RelayURL = s.RelayURL
 		out.STUNURL = s.STUNURL
-		rows, e := tx.Query("SELECT id,name,ip,wg_key,identity FROM devices WHERE network_id=? AND status='approved' AND id<>? ORDER BY id", d.NetworkID, d.ID)
+		rows, e := tx.Query("SELECT id,name,ip,wg_key,identity,discovery_enabled,COALESCE(last_seen,0) FROM devices WHERE network_id=? AND status='approved' AND id<>? ORDER BY id", d.NetworkID, d.ID)
 		if e != nil {
 			return e
 		}
 		type candidate struct {
-			peer     Peer
-			identity string
+			peer      Peer
+			identity  string
+			Discovery bool
+			LastSeen  int64
 		}
 		var cs []candidate
 		for rows.Next() {
 			var c candidate
-			if e = rows.Scan(&c.peer.ID, &c.peer.Name, &c.peer.IP, &c.peer.WGKey, &c.identity); e != nil {
+			if e = rows.Scan(&c.peer.ID, &c.peer.Name, &c.peer.IP, &c.peer.WGKey, &c.identity, &c.Discovery, &c.LastSeen); e != nil {
 				rows.Close()
 				return e
 			}
@@ -846,6 +861,7 @@ func (s *Service) snapshot(w http.ResponseWriter, r *http.Request) error {
 			if g, ok := grants[c.peer.ID]; ok && g.Gateway == d.ID {
 				c.peer.ExitServed = g.Targets
 			}
+			c.peer.Discovery = v.Discovery && c.Discovery && c.LastSeen >= t-20
 			c.peer.Subnets = advanced[c.peer.ID].Subnets
 			c.peer.DNSLabel = advanced[c.peer.ID].DNSLabel
 			c.peer.Traffic = traffic[[2]string{a, b}]

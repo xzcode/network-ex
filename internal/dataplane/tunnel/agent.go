@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/pion/stun"
 	"github.com/xzcode/network-ex/internal/dataplane/discovery"
+	"github.com/xzcode/network-ex/internal/dataplane/ethernet"
 	"github.com/xzcode/network-ex/internal/dataplane/guard"
 	"github.com/xzcode/network-ex/pkg/protocol"
 	"net"
@@ -32,6 +33,7 @@ import (
 )
 
 type Config struct {
+	Ethernet        bool                     `json:"-"`
 	Discovery       protocol.DiscoveryPolicy `json:"-"`
 	NetworkCIDR     string                   `json:"-"`
 	ManagedExit     bool                     `json:"-"`
@@ -71,6 +73,8 @@ type PeerStatus struct {
 	ICE            *path.Snapshot `json:"ice,omitempty"`
 }
 type Status struct {
+	Ethernet  *ethernet.Stats  `json:"ethernet,omitempty"`
+	MAC       string           `json:"mac,omitempty"`
 	Discovery *discovery.Stats `json:"discovery,omitempty"`
 	State     string           `json:"state"`
 	IP        string           `json:"ip"`
@@ -273,7 +277,7 @@ func prepare(c Config) (netip.Addr, []transport.Peer, []netip.Addr, string, erro
 			}
 			t.Relay = &relay.Client{URL: p.RelayURL, Token: strings.TrimSpace(string(token)), CAFile: p.RelayCA, Key: ed25519.PrivateKey(k)}
 			if p.ICE {
-				t.ICE = &path.ICE{Relay: t.Relay, STUN: p.STUNURL, Interface: c.Interface, Excluded: used, ExcludedPrefixes: remote, Interfaces: p.ICEInterfaces}
+				t.ICE = &path.ICE{Relay: t.Relay, STUN: p.STUNURL, Interface: c.Interface, Excluded: used, ExcludedPrefixes: ethernetExclusions(c, remote), Interfaces: p.ICEInterfaces}
 			} else if p.STUNURL != "" || len(p.ICEInterfaces) > 0 {
 				return bad(errors.New("stun_url and ice_interfaces require ice=true"))
 			}
@@ -309,7 +313,43 @@ func prepare(c Config) (netip.Addr, []transport.Peer, []netip.Addr, string, erro
 	}
 	return ip, peers, routes, u.String(), nil
 }
+func checkEthernet(c Config) (netip.Prefix, error) {
+	if !c.Ethernet {
+		return netip.Prefix{}, nil
+	}
+	if runtime.GOOS != "linux" {
+		return netip.Prefix{}, errors.New("Ethernet mode requires Linux TAP")
+	}
+	if len(c.Exports) > 0 {
+		return netip.Prefix{}, errors.New("Ethernet mode does not support subnet export")
+	}
+	a, e := overlay(c.IP)
+	if e != nil {
+		return netip.Prefix{}, e
+	}
+	p, e := protocol.EthernetPrefix(c.NetworkCIDR, a)
+	if e != nil {
+		return p, e
+	}
+	for _, v := range c.Peers {
+		if len(v.Subnets)+len(v.ExitTargets)+len(v.ExitServed) > 0 {
+			return p, errors.New("Ethernet mode does not support subnet or exit routes")
+		}
+		a, e := overlay(v.IP)
+		if e != nil {
+			return p, e
+		}
+		if _, e = protocol.EthernetPrefix(c.NetworkCIDR, a); e != nil {
+			return p, e
+		}
+	}
+	return p, c.Discovery.Validate(c.NetworkCIDR)
+}
 func Check(c Config) error {
+	if _, e := checkEthernet(c); e != nil {
+		return e
+	}
+
 	if len(c.Discovery.Rules) > 0 {
 		if e := c.Discovery.Validate(c.NetworkCIDR); e != nil {
 			return e
@@ -349,7 +389,11 @@ func Run(ctx context.Context, c Config) error {
 	if e != nil {
 		return e
 	}
-	if e = protectUnderlay(ctx, c, remote); e != nil {
+	ethPrefix, e := checkEthernet(c)
+	if e != nil {
+		return e
+	}
+	if e = protectUnderlay(ctx, c, ethernetExclusions(c, remote)); e != nil {
 		return e
 	}
 	setupMu.Lock()
@@ -375,16 +419,37 @@ func Run(ctx context.Context, c Config) error {
 	if e = platform.PreflightSubnets(c.Interface, own[1:], remote); e != nil {
 		return e
 	}
-	if e = platform.Preflight(c.Interface, ip, routes); e != nil {
-		return e
+	var t wgtun.Device
+	if c.Ethernet {
+		if e = platform.PreflightEthernet(c.Interface, ethPrefix); e != nil {
+			return e
+		}
+		t, e = platform.CreateEthernet(c.Interface)
+	} else {
+		if e = platform.Preflight(c.Interface, ip, routes); e != nil {
+			return e
+		}
+		t, e = wgtun.CreateTUN(c.Interface, 1280)
 	}
-	t, e := wgtun.CreateTUN(c.Interface, 1280)
 	if e != nil {
 		return e
 	}
 	var wrapped wgtun.Device = &guard.Device{Device: t, Guard: g}
 	var codec *discovery.Codec
-	if len(c.Discovery.Rules) > 0 {
+	var ethCodec *ethernet.Codec
+	if c.Ethernet {
+		ps := []ethernet.Peer{}
+		for _, p := range c.Peers {
+			a, _ := overlay(p.IP)
+			ps = append(ps, ethernet.Peer{IP: a, Traffic: p.Traffic, Discovery: p.Discovery})
+		}
+		ethCodec, e = ethernet.New(ip, ethPrefix, c.Discovery.Rules, ps, g)
+		if e != nil {
+			t.Close()
+			return e
+		}
+		wrapped = &ethernet.Device{Device: t, Codec: ethCodec}
+	} else if len(c.Discovery.Rules) > 0 {
 		if e = c.Discovery.Validate(c.NetworkCIDR); e != nil {
 			t.Close()
 			return e
@@ -413,11 +478,17 @@ func Run(ctx context.Context, c Config) error {
 	if e = dev.IpcSet(u); e != nil {
 		return e
 	}
-	if e = platform.Configure(name, ip, routes); e != nil {
-		return e
-	}
-	if e = platform.ConfigureSubnets(name, remote); e != nil {
-		return e
+	if c.Ethernet {
+		if e = platform.ConfigureEthernet(name, ip, ethPrefix); e != nil {
+			return e
+		}
+	} else {
+		if e = platform.Configure(name, ip, routes); e != nil {
+			return e
+		}
+		if e = platform.ConfigureSubnets(name, remote); e != nil {
+			return e
+		}
 	}
 	if e = platform.ConfigureDiscovery(name, ip, c.Discovery.Rules); e != nil {
 		return e
@@ -432,6 +503,11 @@ func Run(ctx context.Context, c Config) error {
 			return nil
 		}
 		s := Status{State: state, IP: ip.String(), UpdatedAt: time.Now().UTC()}
+		if ethCodec != nil {
+			v := ethCodec.Stats()
+			s.Ethernet = &v
+			s.MAC = protocol.VirtualMAC(ip).String()
+		}
 		if codec != nil {
 			v := codec.Stats()
 			s.Discovery = &v
@@ -511,4 +587,13 @@ func Run(ctx context.Context, c Config) error {
 			}
 		}
 	}
+}
+
+func ethernetExclusions(c Config, remote []netip.Prefix) []netip.Prefix {
+	if c.Ethernet {
+		if p, e := netip.ParsePrefix(c.NetworkCIDR); e == nil {
+			return append(append([]netip.Prefix(nil), remote...), p)
+		}
+	}
+	return remote
 }

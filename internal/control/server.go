@@ -100,6 +100,8 @@ func (s *Service) Handler() http.Handler {
 	route("PUT /api/v1/networks/{id}/exit", s.setExit)
 	route("GET /api/v1/networks/{id}/discovery", s.getDiscovery)
 	route("PUT /api/v1/networks/{id}/discovery", s.setDiscovery)
+	route("GET /api/v1/networks/{id}/ethernet", s.getEthernet)
+	route("PUT /api/v1/networks/{id}/ethernet", s.setEthernet)
 
 	route("GET /api/v1/relay/nodes", s.listNodes)
 	route("POST /api/v1/relay/nodes", s.createNode)
@@ -748,7 +750,7 @@ func (s *Service) snapshot(w http.ResponseWriter, r *http.Request) error {
 		if affected != 1 {
 			return failure(409, "replayed request")
 		}
-		if _, e = tx.Exec("UPDATE devices SET last_seen=?,discovery_enabled=? WHERE id=?", t, v.Discovery, d.ID); e != nil {
+		if _, e = tx.Exec("UPDATE devices SET last_seen=?,discovery_enabled=?,ethernet_enabled=? WHERE id=?", t, v.Discovery, v.Ethernet, d.ID); e != nil {
 			return e
 		}
 		d.LastSeen = t
@@ -762,6 +764,14 @@ func (s *Service) snapshot(w http.ResponseWriter, r *http.Request) error {
 			return nil
 		}
 		out.NetworkCIDR = cidr
+		out.Ethernet, e = ethernetFor(tx, d.NetworkID)
+		if e != nil {
+			return e
+		}
+		if out.Ethernet != v.Ethernet {
+			return failure(426, "network mode and local Ethernet opt-in must match")
+		}
+
 		discovery, e := discoveryFor(tx, d.NetworkID)
 		if e != nil {
 			return e
@@ -805,7 +815,7 @@ func (s *Service) snapshot(w http.ResponseWriter, r *http.Request) error {
 		}
 		out.RelayURL = s.RelayURL
 		out.STUNURL = s.STUNURL
-		rows, e := tx.Query("SELECT id,name,ip,wg_key,identity,discovery_enabled,COALESCE(last_seen,0) FROM devices WHERE network_id=? AND status='approved' AND id<>? ORDER BY id", d.NetworkID, d.ID)
+		rows, e := tx.Query("SELECT id,name,ip,wg_key,identity,discovery_enabled,ethernet_enabled,COALESCE(last_seen,0) FROM devices WHERE network_id=? AND status='approved' AND id<>? ORDER BY id", d.NetworkID, d.ID)
 		if e != nil {
 			return e
 		}
@@ -813,12 +823,13 @@ func (s *Service) snapshot(w http.ResponseWriter, r *http.Request) error {
 			peer      Peer
 			identity  string
 			Discovery bool
+			Ethernet  bool
 			LastSeen  int64
 		}
 		var cs []candidate
 		for rows.Next() {
 			var c candidate
-			if e = rows.Scan(&c.peer.ID, &c.peer.Name, &c.peer.IP, &c.peer.WGKey, &c.identity, &c.Discovery, &c.LastSeen); e != nil {
+			if e = rows.Scan(&c.peer.ID, &c.peer.Name, &c.peer.IP, &c.peer.WGKey, &c.identity, &c.Discovery, &c.Ethernet, &c.LastSeen); e != nil {
 				rows.Close()
 				return e
 			}
@@ -833,6 +844,9 @@ func (s *Service) snapshot(w http.ResponseWriter, r *http.Request) error {
 		epoch := t / 120
 		expires := (epoch+1)*120 + 30
 		for _, c := range cs {
+			if out.Ethernet && (!c.Ethernet || c.LastSeen < t-20) {
+				continue
+			}
 			a, b := d.ID, c.peer.ID
 			if a > b {
 				a, b = b, a

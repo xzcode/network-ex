@@ -94,6 +94,15 @@ func (s *Service) setExit(w http.ResponseWriter, r *http.Request) error {
 		if count != 1 {
 			return failure(404, "client not found")
 		}
+		if len(ps) > 0 {
+			enabled, e := ethernetFor(tx, nid)
+			if e != nil {
+				return e
+			}
+			if enabled {
+				return failure(409, "exit grants are not supported in Ethernet mode")
+			}
+		}
 		if len(ps) == 0 {
 			if _, e = tx.Exec("DELETE FROM exit_grants WHERE network_id=? AND client_id=?", nid, g.Client); e != nil {
 				return e

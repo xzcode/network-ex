@@ -47,6 +47,7 @@ func (v Enrollment) Verify() bool {
 }
 
 type DeviceRequest struct {
+	Ethernet   bool        `json:"ethernet,omitempty"`
 	Discovery  bool        `json:"discovery,omitempty"`
 	ExitRoutes bool        `json:"exit_routes,omitempty"`
 	Advanced   bool        `json:"advanced,omitempty"`
@@ -123,6 +124,7 @@ type Peer struct {
 	Lease       string         `json:"lease"`
 }
 type Snapshot struct {
+	Ethernet    bool            `json:"ethernet,omitempty"`
 	Discovery   DiscoveryPolicy `json:"discovery"`
 	NetworkCIDR string          `json:"network_cidr,omitempty"`
 	Exports     []string        `json:"exports,omitempty"`

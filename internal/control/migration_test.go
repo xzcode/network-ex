@@ -36,7 +36,7 @@ func TestSharedSQLiteMigration(t *testing.T) {
 			defer s.Close()
 			var version int
 			e = s.DB.QueryRow("PRAGMA user_version").Scan(&version)
-			if e == nil && version != 5 {
+			if e == nil && version != 6 {
 				t.Errorf("schema version %d", version)
 			}
 			errs <- e

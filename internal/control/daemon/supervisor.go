@@ -58,6 +58,7 @@ func newSupervisor(ctx context.Context, opt Options) (*supervisor, error) {
 			o.ExitVia = ""
 			o.ExitTargets = nil
 			o.AllowExitTargets = nil
+			o.Ethernet = false
 			o.Discovery = false
 			o.AllowSubnets = nil // local administrator opt-in belongs only to legacy/default slot
 			if runtime.GOOS == "darwin" {

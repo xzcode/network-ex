@@ -203,6 +203,15 @@ func (s *Service) setAdvancedDevice(w http.ResponseWriter, r *http.Request) erro
 			return failure(404, "approved device not found")
 		}
 		// Only administrators can authorize forwarding physical LANs.
+		if len(ps) > 0 {
+			enabled, e := ethernetFor(tx, nid)
+			if e != nil {
+				return e
+			}
+			if enabled {
+				return failure(409, "subnet routes are not supported in Ethernet mode")
+			}
+		}
 		if len(ps) > 0 && u.Role != "admin" {
 			return failure(403, "administrator required to approve subnets")
 		}

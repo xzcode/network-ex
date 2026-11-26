@@ -24,7 +24,7 @@ import (
 	"golang.org/x/crypto/curve25519"
 )
 
-const version = "0.7.0-dev-m7"
+const version = "0.7.1-dev-m7"
 
 func main() {
 	if e := run(os.Args[1:]); e != nil {
@@ -95,6 +95,7 @@ func run(args []string) error {
 		allowSubnets := f.String("allow-subnets", "", "comma-separated approved private CIDRs, local gateway opt-in")
 		dnsListen := f.String("dns-listen", "", "optional loopback DNS listener (e.g. 127.0.0.1:15353)")
 		discovery := f.Bool("game-discovery", false, "opt in to centrally approved UDP broadcast/multicast")
+		ethernet := f.Bool("layer2", false, "opt in to administrator-approved Linux Ethernet mode")
 		if e := f.Parse(args[1:]); e != nil {
 			return e
 		}
@@ -110,7 +111,7 @@ func run(args []string) error {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		return service.Run(ctx, func(c context.Context) error {
-			return daemon.Serve(c, daemon.Options{Discovery: *discovery, ExitVia: *exitVia, ExitTargets: splitList(*exitTargets), AllowExitTargets: splitList(*allowExit), Profiles: *profiles, DNSListen: *dnsListen, AllowSubnets: splitList(*allowSubnets), Root: *root, Socket: *sock, SocketGID: *gid, Interface: *iface, Port: uint16(*port), ICEInterfaces: ifaces})
+			return daemon.Serve(c, daemon.Options{Ethernet: *ethernet, Discovery: *discovery, ExitVia: *exitVia, ExitTargets: splitList(*exitTargets), AllowExitTargets: splitList(*allowExit), Profiles: *profiles, DNSListen: *dnsListen, AllowSubnets: splitList(*allowSubnets), Root: *root, Socket: *sock, SocketGID: *gid, Interface: *iface, Port: uint16(*port), ICEInterfaces: ifaces})
 		})
 	case "ctl":
 		f := flag.NewFlagSet("ctl", flag.ContinueOnError)
@@ -160,6 +161,7 @@ func run(args []string) error {
 		allowSubnets := f.String("allow-subnets", "", "comma-separated approved private CIDRs, local gateway opt-in")
 		dnsListen := f.String("dns-listen", "", "optional loopback DNS listener (e.g. 127.0.0.1:15353)")
 		discovery := f.Bool("game-discovery", false, "opt in to centrally approved UDP broadcast/multicast")
+		ethernet := f.Bool("layer2", false, "opt in to administrator-approved Linux Ethernet mode")
 		if e := f.Parse(args[1:]); e != nil {
 			return e
 		}
@@ -174,7 +176,7 @@ func run(args []string) error {
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		return managed.Run(ctx, managed.Options{Discovery: *discovery, ExitVia: *exitVia, ExitTargets: splitList(*exitTargets), AllowExitTargets: splitList(*allowExit), DNSListen: *dnsListen, AllowSubnets: splitList(*allowSubnets), Dir: *dir, Interface: *iface, Port: uint16(*port), ICEInterfaces: ifaces, RelayCA: *relayCA})
+		return managed.Run(ctx, managed.Options{Ethernet: *ethernet, Discovery: *discovery, ExitVia: *exitVia, ExitTargets: splitList(*exitTargets), AllowExitTargets: splitList(*allowExit), DNSListen: *dnsListen, AllowSubnets: splitList(*allowSubnets), Dir: *dir, Interface: *iface, Port: uint16(*port), ICEInterfaces: ifaces, RelayCA: *relayCA})
 	case "status":
 		f := flag.NewFlagSet("status", flag.ContinueOnError)
 		p := f.String("file", "", "status file")

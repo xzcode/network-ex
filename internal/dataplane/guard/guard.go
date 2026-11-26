@@ -158,7 +158,7 @@ func allowedService(policy *protocol.TrafficPolicy, p packet) bool {
 }
 func (g *Guard) Allow(b []byte, inbound bool) bool {
 	p, ok := parse(b)
-	if !ok || p.proto == protocol.DiscoveryProtocol {
+	if !ok || p.proto == protocol.DiscoveryProtocol || p.proto == protocol.EthernetProtocol {
 		return false
 	}
 	local, remote := p.src, p.dst

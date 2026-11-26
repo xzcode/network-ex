@@ -47,6 +47,11 @@ async function refreshAdvanced(n){
  $("trafficRules").replaceChildren(...view.rules.map(r=>el("p",(names.get(r.a)||r.a)+" ↔ "+(names.get(r.b)||r.b)+" · "+(r.policy.services.length?r.policy.services.map(s=>s.protocol+(s.port?":"+s.port:"")).join(", "):"拒绝全部服务"))));
  fillAdvancedDevice();
  $("exitSection").hidden=user?.role!=="admin";
+ $("ethernetSection").hidden=user?.role!=="admin";
+ if(user?.role==="admin"){
+  const ethernet=await api("/networks/"+n.id+"/ethernet");if(selected?.id!==n.id)return;
+  $("ethernetForm").elements.enabled.checked=ethernet.enabled;
+ }
  $("discoverySection").hidden=user?.role!=="admin";
  if(user?.role==="admin"){
   const discovery=await api("/networks/"+n.id+"/discovery");if(selected?.id!==n.id)return;
@@ -77,4 +82,9 @@ $("discoveryForm").onsubmit=guarded(async e=>{
   return{destination:m[1],port:Number(m[2])};
  });
  await api("/networks/"+selected.id+"/discovery","PUT",{rules});await refresh();msg("游戏联机发现规则已保存");
+});
+
+$("ethernetForm").onsubmit=guarded(async e=>{
+ if(!selected||user?.role!=="admin"||!confirm("切换网络模式将断开现有连接，确认继续？"))return;
+ await api("/networks/"+selected.id+"/ethernet","PUT",{enabled:e.target.elements.enabled.checked});await refresh();msg("网络模式已保存");
 });

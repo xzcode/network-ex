@@ -60,6 +60,7 @@ type Response struct {
 	Status   *Status          `json:"status,omitempty"`
 }
 type Options struct {
+	Ethernet                      bool
 	Discovery                     bool
 	ExitVia                       string
 	ExitTargets, AllowExitTargets []string
@@ -173,7 +174,7 @@ func (d *Daemon) start() error {
 	done := d.done
 	d.lastErr = ""
 	go func() {
-		done <- managed.Run(ctx, managed.Options{Discovery: d.opt.Discovery, ExitVia: d.opt.ExitVia, ExitTargets: d.opt.ExitTargets, AllowExitTargets: d.opt.AllowExitTargets, DNSListen: d.opt.DNSListen, DNSHub: d.opt.DNSHub, DNSProfile: d.opt.DNSProfile, AllowSubnets: d.opt.AllowSubnets, Dir: d.profile(), Interface: d.opt.Interface, Port: d.opt.Port, ICEInterfaces: d.opt.ICEInterfaces})
+		done <- managed.Run(ctx, managed.Options{Ethernet: d.opt.Ethernet, Discovery: d.opt.Discovery, ExitVia: d.opt.ExitVia, ExitTargets: d.opt.ExitTargets, AllowExitTargets: d.opt.AllowExitTargets, DNSListen: d.opt.DNSListen, DNSHub: d.opt.DNSHub, DNSProfile: d.opt.DNSProfile, AllowSubnets: d.opt.AllowSubnets, Dir: d.profile(), Interface: d.opt.Interface, Port: d.opt.Port, ICEInterfaces: d.opt.ICEInterfaces})
 	}()
 	return nil
 }
@@ -202,7 +203,7 @@ func (d *Daemon) stopRun(persist bool) error {
 }
 func (d *Daemon) status() Status {
 	d.reap()
-	s := Status{Platform: runtime.GOOS, Version: "0.7.0-dev-m7", Running: d.done != nil, Desired: d.desired, Error: d.lastErr}
+	s := Status{Platform: runtime.GOOS, Version: "0.7.1-dev-m7", Running: d.done != nil, Desired: d.desired, Error: d.lastErr}
 	if _, e := os.Lstat(d.profile()); e == nil {
 		s.ProfileExists = true
 	}

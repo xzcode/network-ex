@@ -76,13 +76,13 @@ func Open(path string) (*Store, error) {
 		if e := tx.QueryRow("PRAGMA user_version").Scan(&v); e != nil {
 			return e
 		}
-		if v < 0 || v > 5 {
+		if v < 0 || v > 6 {
 			return fmt.Errorf("unsupported database schema %d", v)
 		}
 		for _, m := range []struct {
 			version int
 			sql     string
-		}{{1, schema}, {2, schemaV2}, {3, schemaV3}, {4, schemaV4}, {5, schemaV5}} {
+		}{{1, schema}, {2, schemaV2}, {3, schemaV3}, {4, schemaV4}, {5, schemaV5}, {6, schemaV6}} {
 			if v < m.version {
 				if _, e := tx.Exec(m.sql); e != nil {
 					return e
